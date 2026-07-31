@@ -1,36 +1,38 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Beyond Borders — Admin Console & API
 
-## Getting Started
+The backend of record for the Beyond Borders travel platform. This repository owns the PostgreSQL database, every migration, all business logic, the staff console, and the versioned `/api/v1` REST API.
 
-First, run the development server:
+The [public website](https://github.com/ramim121/ai-trip) is a separate repository with **no database access** — it consumes this API, as will a future mobile app.
+
+**→ [SETUP.md](./SETUP.md) has the full setup guide for both projects.**
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+cp .env.example .env      # fill in DATABASE_URL, two auth secrets, Gemini key
+npx prisma generate
+npx prisma migrate deploy
+npm run db:seed
+npm run dev               # http://localhost:3001
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## What's here
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+- **Auth** — argon2id passwords, audience-separated JWTs, rotating refresh tokens with family-wide reuse detection and an absolute session ceiling. Travellers and staff live in separate tables with separate signing secrets; there is deliberately no `isAdmin` flag on a user.
+- **Entitlements** — plans, subscriptions, per-itinerary unlocks, usage counters. Every limit is enforced server-side through atomic conditional claims, never from a client-supplied flag.
+- **Catalog** — destinations and activities with opening hours, tags, durations and BDT prices. This is what the AI is grounded on.
+- **AI planner** — Gemini via the Vercel AI SDK, tool-grounded so it can only recommend activities that exist in the catalog. Prompt-injection isolation, per-session token budgets, and rate limiting.
+- **OpenAPI** — every endpoint registered and emitted to `openapi/v1.json`, which the web repo codegens its typed client from.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Stack
 
-## Learn More
+Next.js 16 · React 19 · Prisma 7 · PostgreSQL · Tailwind v4 · Zod v4 · Vitest · Playwright
 
-To learn more about Next.js, take a look at the following resources:
+> **Next.js 16 and Prisma 7 both introduced breaking changes.** `middleware.ts` is now `proxy.ts`; `cookies()`/`headers()`/`params` are async-only; Prisma needs an explicit driver adapter and generates into `src/generated/`. See [AGENTS.md](./AGENTS.md) and the bundled docs in `node_modules/next/dist/docs/`.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Commands
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```bash
+npm run dev            npm run build          npm run typecheck
+npm run lint           npm run format:check   npm test
+npm run db:seed        npm run openapi:write  npx prisma studio
+```

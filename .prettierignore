@@ -1,0 +1,30 @@
+node_modules
+.next
+src/generated
+prisma/migrations
+
+# Machine-generated artefacts.
+package-lock.json
+coverage
+out
+build
+playwright-report
+test-results
+*.tsbuildinfo
+next-env.d.ts
+# Emitted by `npm run openapi:write`. JSON.stringify and Prettier disagree about
+# collapsing short arrays, and the writer must stay the only thing that edits it.
+openapi/v1.json
+
+# Vendored agent/editor tooling — third-party docs, not our source.
+.agents
+.claude
+.windsurf
+skills-lock.json
+
+# TODO(tooling): temporary exemption. This file is on the do-not-modify list for
+# the task that introduced Prettier, so it could not receive the one-time format
+# pass. Its only deviation is the wrapping of one conditional return type.
+# Remove this line and run `npx prettier --write src/server/auth/jwt.ts`
+# once the file's owner signs off.
+src/server/auth/jwt.ts

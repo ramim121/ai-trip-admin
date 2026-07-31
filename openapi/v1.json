@@ -1,0 +1,5057 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "Beyond Borders API",
+    "version": "1.0.0",
+    "description": "The contract between beyond-borders-admin (which serves it) and beyond-borders-web (which consumes it). Generated from the same zod schemas the route handlers validate against, so it cannot describe a shape the server does not accept.\n\nSuccess responses return the resource directly, with no envelope. Every non-2xx response is an `ErrorResponse`. Branch on `error.code`, never on `error.message` — the wording is not part of the contract."
+  },
+  "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
+  "servers": [
+    {
+      "url": "http://localhost:3001",
+      "description": "Local development (`npm run dev`)."
+    }
+  ],
+  "tags": [
+    {
+      "name": "Auth",
+      "description": "Traveller accounts and sessions. Public, unauthenticated origins."
+    },
+    {
+      "name": "Admin Auth",
+      "description": "Staff accounts and sessions. Separate table, separate signing secret, separate audience."
+    },
+    {
+      "name": "Plans",
+      "description": "What is on sale, priced in whole Bangladeshi taka. Public, because a pricing page behind a login converts nobody."
+    },
+    {
+      "name": "Entitlements",
+      "description": "What an account may do, how much of it is left, and what would lift a limit. Reported so a client can explain a wall rather than discover it — never so a client can decide one."
+    },
+    {
+      "name": "Planner",
+      "description": "Trip generation. The teaser is the only surface reachable without an account, and it is a fixed questionnaire rather than a chat, which is what makes its replies cacheable and abuse cheap."
+    },
+    {
+      "name": "Itineraries",
+      "description": "A traveller's own trips and their timelines. Server-authoritative: the client says what it wants and the server decides what happens, down to recomputing every price from the catalog. Conflicts are reported, never resolved by moving somebody's day."
+    },
+    {
+      "name": "Catalog",
+      "description": "Destinations and the curated activities we actually sell. Public and unauthenticated: this is what the website browses, and the only inventory the AI planner may recommend. Unpublished rows are never listed, never counted and never addressable."
+    }
+  ],
+  "security": [],
+  "paths": {
+    "/api/v1/auth/register": {
+      "post": {
+        "operationId": "registerUser",
+        "summary": "Create a traveller account",
+        "description": "Creates the account and signs the traveller in immediately — the response carries a full session, so no follow-up login call is needed. This is the only endpoint in the API that reveals whether an email address is already registered; every other one answers identically for known and unknown addresses.",
+        "tags": [
+          "Auth"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The account was created and is now signed in.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserSessionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request body was not valid JSON, or failed schema validation. `details` names the offending fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "An account already exists for this email address.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/login": {
+      "post": {
+        "operationId": "loginUser",
+        "summary": "Sign in as a traveller",
+        "description": "Exchanges credentials for an access/refresh token pair. An unknown address, a wrong password and a suspended account are indistinguishable from the outside: same status, same message, and comparable timing.",
+        "tags": [
+          "Auth"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Signed in.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserSessionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request body was not valid JSON, or failed schema validation. `details` names the offending fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The credentials were refused. Covers an unknown address, an incorrect password and a non-active account, without distinguishing between them.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/refresh": {
+      "post": {
+        "operationId": "refreshUserSession",
+        "summary": "Rotate a traveller refresh token",
+        "description": "Trades a refresh token for its successor. No access token is required — the refresh token is itself the credential, and the reason to present it is that the access token has expired. The old token is invalidated; replaying it revokes the entire session family on every device.",
+        "tags": [
+          "Auth"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "A fresh token pair. Discard the presented one.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenPair"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request body was not valid JSON, or failed schema validation. `details` names the offending fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The refresh token is unknown, expired, already rotated, or belongs to an account that is no longer active. Sign the traveller in again.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "operationId": "logoutUser",
+        "summary": "End one traveller session",
+        "description": "Revokes the presented refresh token and nothing else, so signing out on a phone leaves a laptop signed in. Always 204, including for a token that never existed — answering 404 would turn this into a way to test whether a captured token is still live. The matching access token keeps working until it expires.",
+        "tags": [
+          "Auth"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "The session is ended, or was never live."
+          },
+          "400": {
+            "description": "The request body was not valid JSON, or failed schema validation. `details` names the offending fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/me": {
+      "get": {
+        "operationId": "getCurrentUser",
+        "summary": "The signed-in traveller",
+        "description": "Reads the profile from the database rather than from the token, so a name or avatar changed a moment ago is reflected immediately. Account status is re-checked here: access tokens are not revocable, so this is where a suspension applied since the token was minted takes effect.",
+        "tags": [
+          "Auth"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The traveller behind the bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicUser"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, malformed, expired, signed for the other audience, or names an account that is no longer active.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/password/forgot": {
+      "post": {
+        "operationId": "requestPasswordReset",
+        "summary": "Request a password reset link",
+        "description": "Always 202 with the same body, whether or not the address is registered — anything else would make this a bulk membership test. The copy is phrased conditionally for the same reason, so the wording does not become the oracle the status code refuses to be. Suspended and deleted accounts are sent nothing.",
+        "tags": [
+          "Auth"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ForgotPasswordBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "The request was accepted. Says nothing about whether the address exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AcceptedResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request body was not valid JSON, or failed schema validation. `details` names the offending fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/password/reset": {
+      "post": {
+        "operationId": "resetPassword",
+        "summary": "Spend a password reset link",
+        "description": "Sets the new password and revokes every refresh token the account holds, on every device. No session is returned: handing out tokens here would sign in anyone who merely intercepted the link, so send the traveller to the login form afterwards. The token is single-use.",
+        "tags": [
+          "Auth"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResetPasswordBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "The password was changed and all sessions were revoked."
+          },
+          "400": {
+            "description": "The body failed validation, or the reset token is unknown, expired or already used — those three are not distinguished. `details[].path` is `token` for the latter.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/auth/login": {
+      "post": {
+        "operationId": "loginAdmin",
+        "summary": "Sign in as staff",
+        "description": "Verified against a separate table and signed with a separate secret, so a traveller token can never satisfy an admin route and no request a traveller can make grants staff privilege. Failures are audited; the response tells the caller nothing about which check failed.",
+        "tags": [
+          "Admin Auth"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Signed in.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminSessionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request body was not valid JSON, or failed schema validation. `details` names the offending fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The credentials were refused. Covers an unknown address, an incorrect password and a non-active account, without distinguishing between them.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/auth/refresh": {
+      "post": {
+        "operationId": "refreshAdminSession",
+        "summary": "Rotate a staff refresh token",
+        "description": "Where staff revocation actually bites. The row is re-read on every rotation, anything no longer active is refused, and the successor token carries the role the database holds now rather than the one the old token claimed.",
+        "tags": [
+          "Admin Auth"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "A fresh token pair. Discard the presented one.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenPair"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request body was not valid JSON, or failed schema validation. `details` names the offending fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The refresh token is unknown, expired, already rotated, or belongs to an admin who is no longer active. Sign in again.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/auth/logout": {
+      "post": {
+        "operationId": "logoutAdmin",
+        "summary": "End one staff session",
+        "description": "Always 204, for the same reason the traveller logout is. Revocation is scoped to the presented token and touches the admin tables only, so a traveller token posted here matches nothing and changes nothing.",
+        "tags": [
+          "Admin Auth"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "The session is ended, or was never live."
+          },
+          "400": {
+            "description": "The request body was not valid JSON, or failed schema validation. `details` names the offending fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/auth/me": {
+      "get": {
+        "operationId": "getCurrentAdmin",
+        "summary": "The signed-in staff member",
+        "description": "Open to every role — each admin may read their own record. The role returned is the one in the database, not the one in the token, so a console that renders navigation from this response will not offer a demoted admin controls the server is about to refuse.",
+        "tags": [
+          "Admin Auth"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The staff member behind the bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAdmin"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, malformed, expired, signed for the other audience, or names an account that is no longer active.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token is valid but the role it carries is not permitted here. Not reachable on this endpoint today — it accepts every role — but documented because it is the standard refusal of the admin guard, and role-scoped endpoints will emit it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/plans": {
+      "get": {
+        "operationId": "listPlans",
+        "summary": "The plans on sale",
+        "description": "Public and unauthenticated — a pricing page behind a login converts nobody. Retired plans are omitted rather than deleted, since subscriptions and payments still reference them.\n\nPrices are whole Bangladeshi taka. There is no minor unit, no fractional price and no USD figure: `bdtPerUsd` is returned so a client can convert at render time, which is what stops a rate change rewriting a price that was already quoted.\n\nA `null` on any limit means UNLIMITED, never zero. Reading it as zero turns the most expensive tier into the most restrictive one.",
+        "tags": [
+          "Plans"
+        ],
+        "responses": {
+          "200": {
+            "description": "Every active plan, in display order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanListResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/me/entitlements": {
+      "get": {
+        "operationId": "getMyEntitlements",
+        "summary": "Current limits, usage and walls",
+        "description": "What this traveller may do and how much of it they have already done, so a client can explain a wall before hitting it rather than discovering it as a 403. `refusals` names the ones already in force, each with the upgrade that would lift it.\n\nThis is a report, not an authority. Every mutating endpoint re-runs the same checks against the same tables, so a client that caches this past a payment, or edits it, gains nothing — which is exactly what makes it safe to publish the numbers.\n\nAn expired subscription reports as FREE with no ceremony: it stops matching, so there is no lapsed state for a client to have to interpret.",
+        "tags": [
+          "Entitlements"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The plan in force, the counters for the current period, and any active walls.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EntitlementsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, malformed, expired, signed for the other audience, or names an account that is no longer active.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/planner/teaser": {
+      "post": {
+        "operationId": "generateTeaser",
+        "summary": "The anonymous trip preview",
+        "description": "Answers a four-question form with a short preview. Deliberately not a chat: the small, fixed input space is what makes the reply cacheable, and the cache is what makes a bypass attempt cost no AI spend.\n\nAn anonymous visitor gets exactly one reply, ever. Identity is the union of three signals — the signed `bb_visitor` cookie, a salted hash of the IP, and a salted hash of the optional `deviceFingerprint` — and a match on ANY ONE of them is the same visitor, so clearing cookies alone does not reset the quota. The response re-issues that cookie, including when the visitor was recognised by one of the other two signals.\n\nA cached reply still spends the prompt: the rule is one reply, not one model call. Send a traveller bearer token to be metered against a plan instead of the anonymous quota; an absent or expired token is simply treated as anonymous.",
+        "tags": [
+          "Planner"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TeaserRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The preview. `cached` says whether the model was called; `promptsRemaining` is null for a signed-in caller.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeaserReply"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request body was not valid JSON, or failed schema validation. `details` names the offending fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The action is not available on this account. `details` carries one entry whose `path` is `reason` and whose `message` is an EntitlementReason — ANON_PROMPT_EXHAUSTED, FREE_DAY_LIMIT, SAVE_LIMIT or PERIOD_LIMIT. GET /api/v1/me/entitlements describes what would lift it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Previews are switched off — an operational kill switch for AI spend, not a fault. Cached replies are still served while it is on, so reaching this means nothing was cached for these particular answers.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/destinations": {
+      "get": {
+        "operationId": "listDestinations",
+        "summary": "Destinations we sell",
+        "description": "The top of the catalog, and where a browse page or a planning session starts. The `slug` returned here is the key the activities endpoint takes.\n\nRetired destinations are absent rather than flagged, so a client cannot forget to filter them. `activityCount` counts published activities only — advertising eleven things to do when three of them are drafts is a promise ops cannot keep.\n\nUnpaginated by design: this is a curated list of places a Bangladeshi tour operator actually runs trips to, not a directory of the world.",
+        "tags": [
+          "Catalog"
+        ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "description": "Filter by name, slug, country or region, case-insensitively.",
+            "schema": {
+              "type": "string",
+              "maxLength": 120
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every active destination, in curated order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DestinationListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A query parameter failed validation — a non-numeric `limit`, an out-of-range bound, an unknown enum value. `details[].path` names the parameter.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/destinations/{slug}/activities": {
+      "get": {
+        "operationId": "listDestinationActivities",
+        "summary": "Ranked activities for one destination",
+        "description": "The same ranked search the AI planner runs through its `searchActivities` tool. One implementation on purpose: if browsing and planning ranked differently, a traveller would be shown one order on the website and another in their itinerary, and neither of us could say which was right.\n\nPass `interests` in the traveller's own words. Ranking is by how many of them a row's tags answer, then by curated order; `matchedInterests` on each result says which ones hit, so a UI can explain the ordering rather than assert it.\n\nA budget passed as `maxPricePerPersonBdt` does NOT drop activities with no listed price. Null price means free, or quoted case by case, and excluding those would hide every free sight from exactly the traveller who most wants one — read `priceNote`.\n\n`total` is what passed the filters before `limit`. There is no cursor: at tens of activities per destination, a pagination contract we would owe forever is not worth it.",
+        "tags": [
+          "Catalog"
+        ],
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "interests",
+            "in": "query",
+            "required": false,
+            "description": "Interest tags to rank by, e.g. `beach` or `street food`. Repeat the key or separate with commas. Matched loosely against tag slugs and labels, so a plural or a label spelling still finds the tag. At most 10 are considered.",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              ]
+            },
+            "style": "form",
+            "explode": true
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "description": "Restrict to a single category.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "SIGHTSEEING",
+                "ADVENTURE",
+                "WATER_SPORTS",
+                "CULTURE",
+                "FOOD",
+                "WELLNESS",
+                "NIGHTLIFE",
+                "SHOPPING",
+                "NATURE",
+                "TRANSPORT"
+              ]
+            }
+          },
+          {
+            "name": "timeOfDay",
+            "in": "query",
+            "required": false,
+            "description": "Slot being filled. Activities marked `ANY` suit every slot and are always included, so this narrows rather than excludes.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "ANY",
+                "EARLY_MORNING",
+                "MORNING",
+                "AFTERNOON",
+                "EVENING",
+                "NIGHT"
+              ]
+            }
+          },
+          {
+            "name": "maxDurationMinutes",
+            "in": "query",
+            "required": false,
+            "description": "Longest activity to return, in minutes, excluding travel to and from.",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{1,9}$"
+            }
+          },
+          {
+            "name": "maxPricePerPersonBdt",
+            "in": "query",
+            "required": false,
+            "description": "Budget ceiling in whole BDT per person. Activities with no listed price — free sights, and anything quoted case by case — are always included; read `priceNote`.",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{1,9}$"
+            }
+          },
+          {
+            "name": "partySize",
+            "in": "query",
+            "required": false,
+            "description": "Excludes activities that cannot take a group this size. A null bound on an activity means no bound, so it satisfies any party.",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{1,9}$"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Maximum activities to return. Defaults to 10.",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{1,9}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The destination, and its activities ranked against the requested interests.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DestinationActivitiesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A query parameter failed validation — a non-numeric `limit`, an out-of-range bound, an unknown enum value. `details[].path` names the parameter.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such destination, or it has been retired. The two are not distinguished. Note this is a 404 rather than an empty list: answering `200 { activities: [] }` for a place we do not go would read as \"we go there, there is just nothing to do\".",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/activities/{id}": {
+      "get": {
+        "operationId": "getActivity",
+        "summary": "One activity, in full",
+        "description": "Everything a detail page needs in one response: the long description, every image with its alt text, the interest tags, and the opening hours.\n\nOpening hours are minutes from local midnight in the destination's timezone, with `dayOfWeek` 0 = Sunday. A `closesMinute` above 1440 runs past midnight — 1560 is 02:00 the next morning. An EMPTY `openingHours` array means ALWAYS AVAILABLE, not closed: it is how a public beach or a viewpoint is recorded. Once any window exists, a weekday with none is closed that day.\n\n`pricePerPersonBdt` is whole taka as an integer. There is no minor unit and no decimal place; null means free or price on request, and `priceNote` carries the nuance.",
+        "tags": [
+          "Catalog"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The activity.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicActivity"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such activity, or it is not published. A malformed id answers 404 here too rather than 400 — the difference between \"not a valid id\" and \"no such id\" is a free oracle for anyone probing what our identifiers look like.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/planner/sessions": {
+      "post": {
+        "operationId": "createPlannerSession",
+        "summary": "Start or resume a planning conversation",
+        "description": "Resuming is the default, and the reason is mundane: a traveller who reloads the page has not started a second trip. A new session per page load would scatter one conversation across a dozen rows and lose the accumulated brief each time. Send `resume: false` when the traveller explicitly asks to plan another trip.\n\n201 means a session was created, 200 that an existing one was handed back; `resumed` in the body says the same thing for clients that would rather not branch on status.\n\nAny `brief` sent here is folded into what we already know rather than replacing it. There is no way to clear a field: a client that forgets one must not be able to erase what the traveller said three turns ago.",
+        "tags": [
+          "Planner"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePlannerSessionBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The conversation already in progress.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlannerSession"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "A new conversation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlannerSession"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request body was not valid JSON, or failed schema validation. `details` names the offending fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, malformed, expired or for the other audience.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/planner/sessions/{id}": {
+      "get": {
+        "operationId": "getPlannerSession",
+        "summary": "One conversation, with its history",
+        "description": "The full message history plus the brief accumulated so far. Ownership is part of the query rather than a check performed after it, so there is no path that reads another traveller's session at all.\n\nToken counts are per message, not per session, because the configured model can change mid-conversation and cost attribution has to survive that.",
+        "tags": [
+          "Planner"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The conversation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlannerSession"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such planning session, or it belongs to another traveller. The two are deliberately indistinguishable — a 403 here would confirm that an id someone guessed is real.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/planner/sessions/{id}/messages": {
+      "post": {
+        "operationId": "sendPlannerMessage",
+        "summary": "Say something, and stream the reply",
+        "description": "Answers `text/event-stream`, NOT JSON. Each `data:` line carries one PlannerStreamEvent encoded as JSON — the schema below describes a single frame, not the whole body. Append `delta.text` as it arrives; `done` is the last frame unless the connection dropped.\n\nIgnore frame types you do not recognise rather than treating them as errors. That is what lets a frame be added without a version bump.\n\n`limit` is not a failure. It means a plan wall was reached mid-answer and should be rendered as an offer; the turn is still persisted and the conversation is still usable.\n\nEverything that could refuse the turn — ownership, the prompt quota, the session token budget — is settled before the first byte, so a refusal arrives as an ordinary 4xx in the standard envelope rather than as a 200 whose body turns out to contain an error.",
+        "tags": [
+          "Planner"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlannerMessageBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "A stream of events. The schema describes ONE frame, not the response body.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlannerStreamEvent"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body failed validation, or the message was empty once structural markers were stripped from it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The action is not available on this account. `details` carries one entry whose `path` is `reason` and whose `message` is an EntitlementReason — ANON_PROMPT_EXHAUSTED, FREE_DAY_LIMIT, SAVE_LIMIT or PERIOD_LIMIT. GET /api/v1/me/entitlements describes what would lift it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such planning session, or it belongs to another traveller. The two are deliberately indistinguishable — a 403 here would confirm that an id someone guessed is real.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "This conversation has spent its token budget. Start a new session to keep planning — the brief is not lost, it is on the itinerary you have already generated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/planner/sessions/{id}/itinerary": {
+      "post": {
+        "operationId": "materialiseItinerary",
+        "summary": "Turn the brief into a real itinerary",
+        "description": "The itinerary comes back WITH the day allowance beside it, and that pairing is the product rule rather than a convenience. A FREE traveller who asked for seven days gets a genuinely good two-day plan plus a `refusal` explaining the rest and what would lift it — not a 403, and not a silent two-day answer that pretends nothing was cut.\n\nCompare `generatedDays` with `requestedDays` to know whether a wall was hit. `totalDays` on the itinerary records the trip they asked for, not what we planned, so the unlock still has something to unlock.\n\n`days` in the body is a request. The entitlement decides the length; a client-supplied day count is an opinion, never an input to enforcement.\n\nA 403 here means the monthly generation allowance is spent — the one case with no partial plan to hand back.",
+        "tags": [
+          "Planner"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MaterialiseItineraryBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The itinerary, and how much of it the entitlement allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaterialiseItineraryResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body failed validation, or the brief has no destination yet — an itinerary cannot be built without one.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The action is not available on this account. `details` carries one entry whose `path` is `reason` and whose `message` is an EntitlementReason — ANON_PROMPT_EXHAUSTED, FREE_DAY_LIMIT, SAVE_LIMIT or PERIOD_LIMIT. GET /api/v1/me/entitlements describes what would lift it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such planning session, or it belongs to another traveller. The two are deliberately indistinguishable — a 403 here would confirm that an id someone guessed is real.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/itineraries": {
+      "get": {
+        "operationId": "listItineraries",
+        "summary": "The traveller's own trips",
+        "description": "Summaries only. A list returning every day and every block would ship hundreds of kilobytes to render a dozen cards, and would make the practical page size a function of how detailed somebody's trips happen to be.\n\nThere is no parameter for whose trips to list. The user id comes from the token and goes straight into the WHERE clause, so there is nothing here to tamper with.\n\n`total` counts everything matching the filter, ignoring `limit` and `offset`.",
+        "tags": [
+          "Itineraries"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "DRAFT",
+                "SAVED",
+                "SUBMITTED",
+                "QUOTED",
+                "ACCEPTED",
+                "BOOKED",
+                "COMPLETED",
+                "CANCELLED"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "This traveller's itineraries.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItineraryListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A query parameter failed validation — a non-numeric `limit`, an out-of-range bound, an unknown enum value. `details[].path` names the parameter.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/itineraries/{id}": {
+      "get": {
+        "operationId": "getItinerary",
+        "summary": "One trip, in full, with its conflicts",
+        "description": "Every day, every block, and every conflict we can see. Times are minutes from local midnight in the destination's timezone: `startMinute` 540 is 09:00, and an `endMinute` above 1440 runs past midnight.\n\nA block with `isEstimate: true` is a transfer WE computed from straight-line distance — ours to redraw whenever the day changes. A block a person authored never carries the flag and is never touched by us.\n\n`plannedDays` below `totalDays` means the plan stops at an entitlement wall rather than at the end of the trip.",
+        "tags": [
+          "Itineraries"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The itinerary.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Itinerary"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such itinerary, or it belongs to another traveller. The two are deliberately indistinguishable, for the same reason a session is.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateItinerary",
+        "summary": "Edit the trip's own fields",
+        "description": "Two fields ripple further than they look, which is why the whole itinerary comes back rather than an acknowledgement.\n\nMoving `startDate` re-dates every day, changing which weekday each falls on and therefore which opening-hours warnings apply. Changing `transportPreference` re-estimates every transfer WE drew — and only those; a ferry the traveller typed in stays exactly where it is.\n\nAn omitted field is left alone. `null` is accepted only where the column is nullable, and means \"clear it\".",
+        "tags": [
+          "Itineraries"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateItineraryBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The itinerary as it now stands.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Itinerary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request body was not valid JSON, or failed schema validation. `details` names the offending fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such itinerary, or it belongs to another traveller. The two are deliberately indistinguishable, for the same reason a session is.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/itineraries/{id}/days/{day}/blocks": {
+      "post": {
+        "operationId": "addItineraryBlock",
+        "summary": "Put something on the timeline",
+        "description": "`day` is the 1-based day number, not a day id — it is what the traveller sees and what a drag-and-drop client already has to hand.\n\nA block that clashes with another IS accepted. The traveller is allowed to build a day we believe is impossible, and our job is to say so rather than refuse: the whole itinerary comes back with `conflicts` populated, which makes the clash unmissable without making it an error.\n\nWhat is refused: an ACTIVITY block with no `activityId`, an `activityId` on any other kind, and an activity that is not in the catalog or is no longer offered. That is the catalog rule at its last enforcement point — nothing outside our inventory can reach a plan.\n\nCost is never accepted from the caller. It is recomputed as the catalog price times the party size, in whole taka.",
+        "tags": [
+          "Itineraries"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "day",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateBlockBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The block, and the itinerary around it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockMutationResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body failed validation, the day number is not a whole number, or the activity reference is missing, forbidden for this kind, or not in the catalog.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such itinerary, or it belongs to another traveller. The two are deliberately indistinguishable, for the same reason a session is. Also returned when the itinerary has no such day.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "That day already holds the maximum number of blocks.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/itineraries/{id}/days/{day}/regenerate": {
+      "post": {
+        "operationId": "regenerateItineraryDay",
+        "summary": "Rebuild one day from the catalog",
+        "description": "Two properties matter to a traveller pressing \"try this day again\". Locked blocks survive — the day is planned AROUND them, never over them. And activities already used on the other days are excluded, so day 3 does not quietly become day 1 again.\n\nA day beyond the entitlement is refused with the structured reason rather than generated. Day 5 of a free traveller's trip is precisely the wall the one-off unlock exists to lift.\n\nRegeneration is deterministic and catalog-only: it places rows the catalog ranked, in the order it ranked them. It is not a model call, so it costs no AI budget.",
+        "tags": [
+          "Itineraries"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "day",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The rebuilt itinerary, and the allowance that governed it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegenerateDayResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The day is not a whole number counting from 1.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The action is not available on this account. `details` carries one entry whose `path` is `reason` and whose `message` is an EntitlementReason — ANON_PROMPT_EXHAUSTED, FREE_DAY_LIMIT, SAVE_LIMIT or PERIOD_LIMIT. GET /api/v1/me/entitlements describes what would lift it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such itinerary, or it belongs to another traveller. The two are deliberately indistinguishable, for the same reason a session is. Also returned when the itinerary has no such day.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/itineraries/{id}/blocks/{blockId}": {
+      "patch": {
+        "operationId": "updateItineraryBlock",
+        "summary": "Move, retime or pin a block",
+        "description": "`dayNumber` moves the block to another day of the same trip; omitting it leaves it where it is. Both the day it left and the day it arrived on have their estimated transfers redrawn.\n\nNothing else on the timeline moves. If the new position clashes, the clash is reported in `conflicts` and the block stays exactly where it was put — shuffling somebody's afternoon to make our arithmetic work would produce a day nobody asked for.\n\nEditing a block we generated makes it theirs: `isEstimate` is cleared, so a later resync can never delete the change.",
+        "tags": [
+          "Itineraries"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "blockId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateBlockBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The itinerary as it now stands.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockMutationResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body failed validation, or the requested times are outside the permitted range.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such itinerary, or it belongs to another traveller. The two are deliberately indistinguishable, for the same reason a session is. Also returned when the block is not part of this itinerary, or the target day does not exist.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteItineraryBlock",
+        "summary": "Take a block off the timeline",
+        "description": "Answers with the updated itinerary rather than 204. Removing a block changes the transfers around it, and a client given no body would have to refetch immediately to draw the timeline correctly.",
+        "tags": [
+          "Itineraries"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "blockId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The itinerary without that block.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Itinerary"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such itinerary, or it belongs to another traveller. The two are deliberately indistinguishable, for the same reason a session is. Also returned when the block is not part of this itinerary.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/itineraries/{id}/save": {
+      "post": {
+        "operationId": "saveItinerary",
+        "summary": "Keep this trip",
+        "description": "A DRAFT is work in progress and occupies no allowance; saving is what claims one of the free tier's three slots. That is why the check lives here rather than at creation — a traveller who tries four ideas and keeps three has not exceeded anything.\n\nRe-saving an itinerary that is already kept succeeds and changes nothing. It is not a fourth of three, and refusing it would leave an account at its cap unable to touch the trips it already has.\n\n`remaining` is what is left of the allowance afterwards, or null on a plan with no cap.",
+        "tags": [
+          "Itineraries"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The itinerary, now kept.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SaveItineraryResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The action is not available on this account. `details` carries one entry whose `path` is `reason` and whose `message` is an EntitlementReason — ANON_PROMPT_EXHAUSTED, FREE_DAY_LIMIT, SAVE_LIMIT or PERIOD_LIMIT. GET /api/v1/me/entitlements describes what would lift it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such itinerary, or it belongs to another traveller. The two are deliberately indistinguishable, for the same reason a session is.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "The `accessToken` from a login or refresh response, sent as `Authorization: Bearer <token>`. Traveller and staff tokens are signed with different secrets and carry different audiences, so one is never accepted where the other is expected. Access tokens are short-lived and are not revocable — call the matching refresh endpoint when one expires."
+      }
+    },
+    "schemas": {
+      "AcceptedResponse": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "additionalProperties": false
+      },
+      "AdminSessionResponse": {
+        "type": "object",
+        "properties": {
+          "accessToken": {
+            "type": "string"
+          },
+          "refreshToken": {
+            "type": "string"
+          },
+          "expiresIn": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Lifetime of accessToken, in seconds."
+          },
+          "admin": {
+            "$ref": "#/components/schemas/PublicAdmin"
+          }
+        },
+        "required": [
+          "accessToken",
+          "refreshToken",
+          "expiresIn",
+          "admin"
+        ],
+        "additionalProperties": false
+      },
+      "BlockMutationResponse": {
+        "type": "object",
+        "properties": {
+          "itinerary": {
+            "$ref": "#/components/schemas/Itinerary"
+          },
+          "blockId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          }
+        },
+        "required": [
+          "itinerary",
+          "blockId"
+        ],
+        "additionalProperties": false,
+        "description": "The whole itinerary comes back, conflicts included: one edit can create a clash on a day the client was not looking at, and a partial response would hide it."
+      },
+      "CreateBlockBody": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "ACTIVITY",
+              "TRANSIT",
+              "MEAL",
+              "REST",
+              "FREE",
+              "ACCOMMODATION"
+            ]
+          },
+          "activityId": {
+            "description": "Required for ACTIVITY and rejected on every other kind.",
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "startMinute": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1439,
+            "description": "Minutes from local midnight, 0–1439. 540 is 09:00."
+          },
+          "endMinute": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2880,
+            "description": "Minutes from the same local midnight. Above 1440 runs into the next morning."
+          },
+          "transitMode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "WALK",
+                  "CAR",
+                  "TAXI",
+                  "RIDESHARE",
+                  "BUS",
+                  "TRAIN",
+                  "FERRY",
+                  "BOAT",
+                  "FLIGHT",
+                  "BICYCLE"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "isLocked": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "kind",
+          "startMinute",
+          "endMinute"
+        ],
+        "description": "Cost is never accepted here — it is recomputed from the catalog price and the party size."
+      },
+      "CreatePlannerSessionBody": {
+        "type": "object",
+        "properties": {
+          "brief": {
+            "$ref": "#/components/schemas/TripBriefInput"
+          },
+          "resume": {
+            "type": "boolean"
+          }
+        }
+      },
+      "DayAllowance": {
+        "type": "object",
+        "properties": {
+          "maxDays": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Days of detail allowed right now."
+          },
+          "unlimited": {
+            "type": "boolean"
+          },
+          "unlocked": {
+            "type": "boolean",
+            "description": "True when the one-off unlock has been bought for this trip."
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "ANONYMOUS",
+              "UNLOCK",
+              "SUBSCRIPTION",
+              "PLAN"
+            ]
+          },
+          "refusal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EntitlementRefusal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "maxDays",
+          "unlimited",
+          "unlocked",
+          "source",
+          "refusal"
+        ],
+        "additionalProperties": false
+      },
+      "DestinationActivitiesResponse": {
+        "type": "object",
+        "properties": {
+          "destination": {
+            "$ref": "#/components/schemas/PublicDestination"
+          },
+          "activities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RankedActivitySummary"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Activities that passed the filters, before `limit` was applied."
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "True when the candidate pool filled up and there may be more behind it. Narrow the filters rather than paging: this endpoint has no cursor."
+          }
+        },
+        "required": [
+          "destination",
+          "activities",
+          "total",
+          "truncated"
+        ],
+        "additionalProperties": false
+      },
+      "DestinationListResponse": {
+        "type": "object",
+        "properties": {
+          "destinations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicDestination"
+            }
+          }
+        },
+        "required": [
+          "destinations"
+        ],
+        "additionalProperties": false
+      },
+      "Email": {
+        "format": "email",
+        "description": "Case-insensitive. Stored and compared in lowercase.",
+        "type": "string",
+        "maxLength": 254
+      },
+      "EntitlementReason": {
+        "type": "string",
+        "enum": [
+          "ANON_PROMPT_EXHAUSTED",
+          "FREE_DAY_LIMIT",
+          "SAVE_LIMIT",
+          "PERIOD_LIMIT"
+        ],
+        "description": "Machine-readable cause of a refusal. Branch on this, never on the message text. It also appears on a 403 as the `details` entry whose `path` is `reason`."
+      },
+      "EntitlementRefusal": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "$ref": "#/components/schemas/EntitlementReason"
+          },
+          "message": {
+            "type": "string",
+            "description": "Safe to show a traveller. Wording is not part of the contract."
+          },
+          "upgrade": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UpgradeOffer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "reason",
+          "message",
+          "upgrade"
+        ],
+        "additionalProperties": false
+      },
+      "EntitlementRefusals": {
+        "type": "object",
+        "properties": {
+          "save": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EntitlementRefusal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "prompt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EntitlementRefusal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "save",
+          "prompt"
+        ],
+        "additionalProperties": false
+      },
+      "EntitlementsResponse": {
+        "type": "object",
+        "properties": {
+          "planCode": {
+            "type": "string",
+            "enum": [
+              "FREE",
+              "UNLOCK_SINGLE",
+              "PREMIUM_10",
+              "PREMIUM_50",
+              "PREMIUM_100"
+            ]
+          },
+          "planName": {
+            "type": "string"
+          },
+          "isAnonymous": {
+            "type": "boolean"
+          },
+          "limits": {
+            "type": "object",
+            "properties": {
+              "maxItineraryDays": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "maxSavedItineraries": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "itinerariesPerPeriod": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "maxItineraryDays",
+              "maxSavedItineraries",
+              "itinerariesPerPeriod"
+            ],
+            "additionalProperties": false,
+            "description": "`null` on any field means unlimited, never zero."
+          },
+          "usage": {
+            "type": "object",
+            "properties": {
+              "savedItineraries": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "itinerariesThisPeriod": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "aiPromptsThisPeriod": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "savedItineraries",
+              "itinerariesThisPeriod",
+              "aiPromptsThisPeriod"
+            ],
+            "additionalProperties": false
+          },
+          "period": {
+            "type": "object",
+            "properties": {
+              "start": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+              },
+              "end": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                "description": "When the per-period counters reset: a subscriber’s billing month, or the UTC calendar month for everyone else."
+              }
+            },
+            "required": [
+              "start",
+              "end"
+            ],
+            "additionalProperties": false
+          },
+          "unlockPriceBdt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Current price of the one-off full-length unlock for a single itinerary."
+          },
+          "refusals": {
+            "$ref": "#/components/schemas/EntitlementRefusals"
+          }
+        },
+        "required": [
+          "planCode",
+          "planName",
+          "isAnonymous",
+          "limits",
+          "usage",
+          "period",
+          "unlockPriceBdt",
+          "refusals"
+        ],
+        "additionalProperties": false
+      },
+      "ErrorCode": {
+        "type": "string",
+        "enum": [
+          "VALIDATION_FAILED",
+          "UNAUTHORIZED",
+          "FORBIDDEN",
+          "NOT_FOUND",
+          "CONFLICT",
+          "RATE_LIMITED",
+          "INTERNAL"
+        ],
+        "description": "Machine-readable classification of the failure. Branch on this, never on the message text."
+      },
+      "ErrorDetail": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Dotted path to the offending field, e.g. `traveller.email`. Empty for the body root."
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "message"
+        ],
+        "additionalProperties": false,
+        "description": "One field-level complaint, suitable for attaching to a form control."
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "$ref": "#/components/schemas/ErrorCode"
+              },
+              "message": {
+                "type": "string",
+                "description": "Human-readable summary. Wording is not part of the contract."
+              },
+              "details": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "additionalProperties": false,
+        "description": "The single error shape returned by every non-2xx response in this API."
+      },
+      "ForgotPasswordBody": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "$ref": "#/components/schemas/Email"
+          }
+        },
+        "required": [
+          "email"
+        ]
+      },
+      "Itinerary": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "plannerSessionId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "destinationId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "destinationLabel": {
+            "type": "string",
+            "description": "What the traveller called the place. Kept even when destinationId is null."
+          },
+          "startDate": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "endDate": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "totalDays": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "The length of trip they asked for."
+          },
+          "plannedDays": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "How many days actually carry a plan. Below totalDays means a plan wall was hit."
+          },
+          "partySize": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "VACATION",
+              "BUSINESS",
+              "HONEYMOON",
+              "FAMILY",
+              "SOLO",
+              "GROUP",
+              "OTHER"
+            ]
+          },
+          "pace": {
+            "type": "string",
+            "enum": [
+              "RELAXED",
+              "BALANCED",
+              "PACKED"
+            ]
+          },
+          "transportPreference": {
+            "type": "string",
+            "enum": [
+              "PRIVATE_CAR",
+              "SELF_DRIVE",
+              "PUBLIC_TRANSIT",
+              "WALKING",
+              "MIXED"
+            ]
+          },
+          "budgetBand": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "BUDGET",
+                  "MID_RANGE",
+                  "PREMIUM",
+                  "LUXURY"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "DRAFT",
+              "SAVED",
+              "SUBMITTED",
+              "QUOTED",
+              "ACCEPTED",
+              "BOOKED",
+              "COMPLETED",
+              "CANCELLED"
+            ]
+          },
+          "isFullyUnlocked": {
+            "type": "boolean"
+          },
+          "coverImageUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+          },
+          "days": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ItineraryDay"
+            }
+          },
+          "conflicts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TimelineConflict"
+            }
+          },
+          "estimatedTotalBdt": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Sum of every block cost, in whole taka."
+          }
+        },
+        "required": [
+          "id",
+          "plannerSessionId",
+          "title",
+          "destinationId",
+          "destinationLabel",
+          "startDate",
+          "endDate",
+          "totalDays",
+          "plannedDays",
+          "partySize",
+          "purpose",
+          "pace",
+          "transportPreference",
+          "budgetBand",
+          "status",
+          "isFullyUnlocked",
+          "coverImageUrl",
+          "createdAt",
+          "updatedAt",
+          "days",
+          "conflicts",
+          "estimatedTotalBdt"
+        ],
+        "additionalProperties": false
+      },
+      "ItineraryBlock": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "dayNumber": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 30,
+            "description": "1-based. Day 1 is the first day."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "ACTIVITY",
+              "TRANSIT",
+              "MEAL",
+              "REST",
+              "FREE",
+              "ACCOMMODATION"
+            ]
+          },
+          "activityId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Always set for ACTIVITY, always null otherwise."
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "startMinute": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1439,
+            "description": "Minutes from local midnight, 0–1439. 540 is 09:00."
+          },
+          "endMinute": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2880,
+            "description": "Minutes from the same local midnight. Above 1440 runs into the next morning."
+          },
+          "transitMode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "WALK",
+                  "CAR",
+                  "TAXI",
+                  "RIDESHARE",
+                  "BUS",
+                  "TRAIN",
+                  "FERRY",
+                  "BOAT",
+                  "FLIGHT",
+                  "BICYCLE"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "transitFromBlockId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "isLocked": {
+            "type": "boolean",
+            "description": "Pinned by the traveller. Regeneration plans around it."
+          },
+          "isEstimate": {
+            "type": "boolean",
+            "description": "True for a transfer computed from distance rather than routed. We may redraw our own estimates freely; a block a person authored is never touched."
+          },
+          "sortOrder": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "costBdt": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Whole taka for the whole block, party size included. Null when nothing is charged."
+          }
+        },
+        "required": [
+          "id",
+          "dayNumber",
+          "kind",
+          "activityId",
+          "title",
+          "description",
+          "startMinute",
+          "endMinute",
+          "transitMode",
+          "transitFromBlockId",
+          "isLocked",
+          "isEstimate",
+          "sortOrder",
+          "costBdt"
+        ],
+        "additionalProperties": false
+      },
+      "ItineraryDay": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "dayNumber": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 30,
+            "description": "1-based. Day 1 is the first day."
+          },
+          "date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "blocks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ItineraryBlock"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "dayNumber",
+          "date",
+          "title",
+          "notes",
+          "blocks"
+        ],
+        "additionalProperties": false
+      },
+      "ItineraryListResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ItinerarySummary"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Matching itineraries in total, ignoring limit and offset."
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "additionalProperties": false
+      },
+      "ItinerarySummary": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "title": {
+            "type": "string"
+          },
+          "destinationLabel": {
+            "type": "string"
+          },
+          "startDate": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "totalDays": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "partySize": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "DRAFT",
+              "SAVED",
+              "SUBMITTED",
+              "QUOTED",
+              "ACCEPTED",
+              "BOOKED",
+              "COMPLETED",
+              "CANCELLED"
+            ]
+          },
+          "isFullyUnlocked": {
+            "type": "boolean"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "destinationLabel",
+          "startDate",
+          "totalDays",
+          "partySize",
+          "status",
+          "isFullyUnlocked",
+          "updatedAt"
+        ],
+        "additionalProperties": false
+      },
+      "LoginBody": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "$ref": "#/components/schemas/Email"
+          },
+          "password": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "email",
+          "password"
+        ]
+      },
+      "MaterialiseItineraryBody": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "days": {
+            "description": "Days wanted. Clamped by the entitlement; defaults to the brief.",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 30
+          }
+        }
+      },
+      "MaterialiseItineraryResponse": {
+        "type": "object",
+        "properties": {
+          "itinerary": {
+            "$ref": "#/components/schemas/Itinerary"
+          },
+          "allowance": {
+            "$ref": "#/components/schemas/DayAllowance"
+          },
+          "requestedDays": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "generatedDays": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Below requestedDays means the allowance bound; see refusal."
+          }
+        },
+        "required": [
+          "itinerary",
+          "allowance",
+          "requestedDays",
+          "generatedDays"
+        ],
+        "additionalProperties": false
+      },
+      "Password": {
+        "type": "string",
+        "minLength": 10,
+        "maxLength": 200,
+        "description": "At least 10 characters. No character-class requirements."
+      },
+      "PlanListResponse": {
+        "type": "object",
+        "properties": {
+          "plans": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlanSummary"
+            }
+          },
+          "bdtPerUsd": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Admin-set display rate. USD is never stored: apply this at render time, so a rate change never rewrites a price that was already quoted. `null` when unconfigured, in which case show taka only."
+          }
+        },
+        "required": [
+          "plans",
+          "bdtPerUsd"
+        ],
+        "additionalProperties": false
+      },
+      "PlannerMessage": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "USER",
+              "ASSISTANT",
+              "SYSTEM",
+              "TOOL"
+            ]
+          },
+          "content": {
+            "type": "string"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "promptTokens": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "completionTokens": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+          }
+        },
+        "required": [
+          "id",
+          "role",
+          "content",
+          "model",
+          "promptTokens",
+          "completionTokens",
+          "createdAt"
+        ],
+        "additionalProperties": false
+      },
+      "PlannerMessageBody": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          }
+        },
+        "required": [
+          "text"
+        ]
+      },
+      "PlannerSession": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ACTIVE",
+              "CONVERTED",
+              "ABANDONED"
+            ]
+          },
+          "tripBrief": {
+            "$ref": "#/components/schemas/TripBrief"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+          },
+          "lastMessageAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+          },
+          "resumed": {
+            "type": "boolean"
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlannerMessage"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "tripBrief",
+          "createdAt",
+          "lastMessageAt",
+          "resumed",
+          "messages"
+        ],
+        "additionalProperties": false
+      },
+      "PlannerStreamEvent": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "start"
+              },
+              "sessionId": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              "userMessageId": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              "model": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "sessionId",
+              "userMessageId",
+              "model"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "delta"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "text"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "tool"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "name"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "brief"
+              },
+              "brief": {
+                "$ref": "#/components/schemas/TripBrief"
+              }
+            },
+            "required": [
+              "type",
+              "brief"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "limit"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "reason",
+              "message"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "done"
+              },
+              "messageId": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              "model": {
+                "type": "string"
+              },
+              "promptTokens": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "completionTokens": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "brief": {
+                "$ref": "#/components/schemas/TripBrief"
+              }
+            },
+            "required": [
+              "type",
+              "messageId",
+              "model",
+              "promptTokens",
+              "completionTokens",
+              "brief"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "error"
+              },
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "code",
+              "message"
+            ],
+            "additionalProperties": false
+          }
+        ],
+        "description": "One Server-Sent Events frame. `delta` carries prose to append; `tool` names a catalog lookup in progress; `limit` is a plan wall reached mid-answer rather than a failure; `done` is always last unless the connection dropped."
+      },
+      "PlanSummary": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "FREE",
+              "UNLOCK_SINGLE",
+              "PREMIUM_10",
+              "PREMIUM_50",
+              "PREMIUM_100"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "priceBdt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Whole Bangladeshi taka. There is no minor unit and no fractional price."
+          },
+          "interval": {
+            "type": "string",
+            "enum": [
+              "NONE",
+              "MONTHLY"
+            ]
+          },
+          "maxItineraryDays": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Longest itinerary this plan may generate. `null` means no limit."
+          },
+          "maxSavedItineraries": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Itineraries that may be held at once. `null` means no limit."
+          },
+          "itinerariesPerPeriod": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Itineraries per billing month. `null` means unmetered."
+          },
+          "sortOrder": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "code",
+          "name",
+          "description",
+          "priceBdt",
+          "interval",
+          "maxItineraryDays",
+          "maxSavedItineraries",
+          "itinerariesPerPeriod",
+          "sortOrder"
+        ],
+        "additionalProperties": false
+      },
+      "PublicActivity": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "SIGHTSEEING",
+              "ADVENTURE",
+              "WATER_SPORTS",
+              "CULTURE",
+              "FOOD",
+              "WELLNESS",
+              "NIGHTLIFE",
+              "SHOPPING",
+              "NATURE",
+              "TRANSPORT"
+            ]
+          },
+          "durationMinutes": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Excludes travel to and from. The planner adds transit blocks for that."
+          },
+          "pricePerPersonBdt": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Whole taka per person. Null means free, or price on request — `priceNote` carries the nuance. There is no minor unit and no decimal: this is an integer."
+          },
+          "priceNote": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "bestTimeOfDay": {
+            "type": "string",
+            "enum": [
+              "ANY",
+              "EARLY_MORNING",
+              "MORNING",
+              "AFTERNOON",
+              "EVENING",
+              "NIGHT"
+            ]
+          },
+          "intensity": {
+            "type": "string",
+            "enum": [
+              "RELAXED",
+              "MODERATE",
+              "ACTIVE"
+            ]
+          },
+          "bookingRequired": {
+            "type": "boolean"
+          },
+          "minPartySize": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null means no lower bound."
+          },
+          "maxPartySize": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null means no upper bound."
+          },
+          "latitude": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "longitude": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicTag"
+            }
+          },
+          "primaryImage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PublicActivityImage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "destination": {
+            "$ref": "#/components/schemas/PublicActivityDestination"
+          },
+          "description": {
+            "type": "string"
+          },
+          "sourceUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where a curator last verified price and hours."
+          },
+          "images": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicActivityImage"
+            }
+          },
+          "openingHours": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicOpeningHours"
+            },
+            "description": "An EMPTY array means always available — a public beach, a viewpoint. Once any window exists, a weekday with no window is closed that day. Do not read empty as closed."
+          }
+        },
+        "required": [
+          "id",
+          "slug",
+          "name",
+          "summary",
+          "category",
+          "durationMinutes",
+          "pricePerPersonBdt",
+          "priceNote",
+          "bestTimeOfDay",
+          "intensity",
+          "bookingRequired",
+          "minPartySize",
+          "maxPartySize",
+          "latitude",
+          "longitude",
+          "tags",
+          "primaryImage",
+          "destination",
+          "description",
+          "sourceUrl",
+          "images",
+          "openingHours"
+        ],
+        "additionalProperties": false
+      },
+      "PublicActivityDestination": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "country": {
+            "type": "string"
+          },
+          "timezone": {
+            "type": "string",
+            "description": "IANA zone. Opening hours are local time in this zone."
+          }
+        },
+        "required": [
+          "id",
+          "slug",
+          "name",
+          "country",
+          "timezone"
+        ],
+        "additionalProperties": false
+      },
+      "PublicActivityImage": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "url": {
+            "type": "string"
+          },
+          "alt": {
+            "type": "string",
+            "description": "Never empty: the column is required precisely so it cannot be."
+          },
+          "sortOrder": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "id",
+          "url",
+          "alt",
+          "sortOrder"
+        ],
+        "additionalProperties": false
+      },
+      "PublicAdmin": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "email": {
+            "type": "string",
+            "format": "email",
+            "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
+          },
+          "name": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "SUPER_ADMIN",
+              "OPS",
+              "CONTENT",
+              "SUPPORT"
+            ]
+          },
+          "avatarUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "name",
+          "role",
+          "avatarUrl"
+        ],
+        "additionalProperties": false
+      },
+      "PublicDestination": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "slug": {
+            "type": "string",
+            "description": "Stable, URL-safe, and the key the activities endpoint takes."
+          },
+          "name": {
+            "type": "string"
+          },
+          "country": {
+            "type": "string"
+          },
+          "region": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "summary": {
+            "type": "string"
+          },
+          "timezone": {
+            "type": "string",
+            "description": "IANA zone, e.g. `Asia/Dhaka`. Every minutes-from-midnight value in an itinerary for this destination is local time in this zone."
+          },
+          "heroImageUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "latitude": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "longitude": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "activityCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Published activities only. Unpublished drafts are never counted or listed."
+          }
+        },
+        "required": [
+          "id",
+          "slug",
+          "name",
+          "country",
+          "region",
+          "summary",
+          "timezone",
+          "heroImageUrl",
+          "latitude",
+          "longitude",
+          "activityCount"
+        ],
+        "additionalProperties": false
+      },
+      "PublicOpeningHours": {
+        "type": "object",
+        "properties": {
+          "dayOfWeek": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 6,
+            "description": "0 = Sunday through 6 = Saturday."
+          },
+          "opensMinute": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Minutes from local midnight. 540 is 09:00."
+          },
+          "closesMinute": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "May exceed 1440 for a venue running past midnight: 1560 is 02:00 the next day."
+          }
+        },
+        "required": [
+          "dayOfWeek",
+          "opensMinute",
+          "closesMinute"
+        ],
+        "additionalProperties": false
+      },
+      "PublicTag": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string",
+            "description": "What a traveller sees. The slug is what code matches on."
+          }
+        },
+        "required": [
+          "slug",
+          "label"
+        ],
+        "additionalProperties": false
+      },
+      "PublicUser": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "email": {
+            "type": "string",
+            "format": "email",
+            "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
+          },
+          "name": {
+            "type": "string"
+          },
+          "avatarUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "emailVerified": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "name",
+          "avatarUrl",
+          "emailVerified",
+          "createdAt"
+        ],
+        "additionalProperties": false
+      },
+      "RankedActivitySummary": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "SIGHTSEEING",
+              "ADVENTURE",
+              "WATER_SPORTS",
+              "CULTURE",
+              "FOOD",
+              "WELLNESS",
+              "NIGHTLIFE",
+              "SHOPPING",
+              "NATURE",
+              "TRANSPORT"
+            ]
+          },
+          "durationMinutes": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Excludes travel to and from. The planner adds transit blocks for that."
+          },
+          "pricePerPersonBdt": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Whole taka per person. Null means free, or price on request — `priceNote` carries the nuance. There is no minor unit and no decimal: this is an integer."
+          },
+          "priceNote": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "bestTimeOfDay": {
+            "type": "string",
+            "enum": [
+              "ANY",
+              "EARLY_MORNING",
+              "MORNING",
+              "AFTERNOON",
+              "EVENING",
+              "NIGHT"
+            ]
+          },
+          "intensity": {
+            "type": "string",
+            "enum": [
+              "RELAXED",
+              "MODERATE",
+              "ACTIVE"
+            ]
+          },
+          "bookingRequired": {
+            "type": "boolean"
+          },
+          "minPartySize": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null means no lower bound."
+          },
+          "maxPartySize": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null means no upper bound."
+          },
+          "latitude": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "longitude": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicTag"
+            }
+          },
+          "primaryImage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PublicActivityImage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "matchedInterests": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Which of the requested `interests` this activity answered, echoed back in the wording they were sent in. Empty when none were requested."
+          }
+        },
+        "required": [
+          "id",
+          "slug",
+          "name",
+          "summary",
+          "category",
+          "durationMinutes",
+          "pricePerPersonBdt",
+          "priceNote",
+          "bestTimeOfDay",
+          "intensity",
+          "bookingRequired",
+          "minPartySize",
+          "maxPartySize",
+          "latitude",
+          "longitude",
+          "tags",
+          "primaryImage",
+          "matchedInterests"
+        ],
+        "additionalProperties": false
+      },
+      "RefreshBody": {
+        "type": "object",
+        "properties": {
+          "refreshToken": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "required": [
+          "refreshToken"
+        ]
+      },
+      "RegenerateDayResponse": {
+        "type": "object",
+        "properties": {
+          "itinerary": {
+            "$ref": "#/components/schemas/Itinerary"
+          },
+          "allowance": {
+            "$ref": "#/components/schemas/DayAllowance"
+          },
+          "dayNumber": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 30,
+            "description": "1-based. Day 1 is the first day."
+          }
+        },
+        "required": [
+          "itinerary",
+          "allowance",
+          "dayNumber"
+        ],
+        "additionalProperties": false
+      },
+      "RegisterBody": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "$ref": "#/components/schemas/Email"
+          },
+          "password": {
+            "$ref": "#/components/schemas/Password"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          }
+        },
+        "required": [
+          "email",
+          "password",
+          "name"
+        ]
+      },
+      "ResetPasswordBody": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "password": {
+            "$ref": "#/components/schemas/Password"
+          }
+        },
+        "required": [
+          "token",
+          "password"
+        ]
+      },
+      "SaveItineraryResponse": {
+        "type": "object",
+        "properties": {
+          "itinerary": {
+            "$ref": "#/components/schemas/Itinerary"
+          },
+          "remaining": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Saved-itinerary allowance left afterwards. Null on an uncapped plan."
+          }
+        },
+        "required": [
+          "itinerary",
+          "remaining"
+        ],
+        "additionalProperties": false
+      },
+      "TeaserPreview": {
+        "type": "object",
+        "properties": {
+          "headline": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "overview": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 800
+          },
+          "dayHighlights": {
+            "minItems": 1,
+            "maxItems": 3,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "dayNumber": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 30
+                },
+                "headline": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 120
+                },
+                "summary": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 400
+                }
+              },
+              "required": [
+                "dayNumber",
+                "headline",
+                "summary"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "suggestedInterests": {
+            "default": [],
+            "maxItems": 6,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 60
+            }
+          },
+          "callToAction": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "headline",
+          "overview",
+          "dayHighlights",
+          "suggestedInterests",
+          "callToAction"
+        ],
+        "additionalProperties": false,
+        "description": "A preview, not an itinerary: at most three broadly sketched days, no timings, no named venues, no prices. The full plan is what signing in is for."
+      },
+      "TeaserReply": {
+        "type": "object",
+        "properties": {
+          "teaser": {
+            "$ref": "#/components/schemas/TeaserPreview"
+          },
+          "cached": {
+            "type": "boolean",
+            "description": "True when this reply came from the cache rather than the model. It still spends the visitor’s prompt — the rule is one reply, not one model call."
+          },
+          "promptsRemaining": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Anonymous previews left for this visitor. `null` when the caller is signed in."
+          }
+        },
+        "required": [
+          "teaser",
+          "cached",
+          "promptsRemaining"
+        ],
+        "additionalProperties": false
+      },
+      "TeaserRequest": {
+        "type": "object",
+        "properties": {
+          "destination": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "totalDays": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 30
+          },
+          "partySize": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 40
+          },
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "VACATION",
+              "BUSINESS",
+              "HONEYMOON",
+              "FAMILY",
+              "SOLO",
+              "GROUP",
+              "OTHER"
+            ]
+          },
+          "deviceFingerprint": {
+            "description": "Opaque device fingerprint. Hashed with a server secret before storage; never persisted raw.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "required": [
+          "destination",
+          "totalDays",
+          "partySize",
+          "purpose"
+        ]
+      },
+      "TimelineConflict": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "ACTIVITY_OVERLAP",
+              "INSUFFICIENT_TRAVEL_TIME",
+              "OUTSIDE_OPENING_HOURS"
+            ]
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "HARD",
+              "WARNING"
+            ]
+          },
+          "dayNumber": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 30,
+            "description": "1-based. Day 1 is the first day."
+          },
+          "blockIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          "minutes": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Minutes of overlap, or of travel shortfall. Zero when the code carries no size."
+          },
+          "message": {
+            "type": "string",
+            "description": "Safe to show a traveller. Wording is not part of the contract."
+          }
+        },
+        "required": [
+          "code",
+          "severity",
+          "dayNumber",
+          "blockIds",
+          "minutes",
+          "message"
+        ],
+        "additionalProperties": false,
+        "description": "Something wrong with the day, reported rather than fixed. HARD means the day cannot be walked as written; WARNING means it can, but probably is not what they meant. Nothing is ever silently reordered to resolve one."
+      },
+      "TokenPair": {
+        "type": "object",
+        "properties": {
+          "accessToken": {
+            "type": "string"
+          },
+          "refreshToken": {
+            "type": "string"
+          },
+          "expiresIn": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Lifetime of accessToken, in seconds."
+          }
+        },
+        "required": [
+          "accessToken",
+          "refreshToken",
+          "expiresIn"
+        ],
+        "additionalProperties": false
+      },
+      "TripBrief": {
+        "type": "object",
+        "properties": {
+          "destination": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "destinationId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "totalDays": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 30
+          },
+          "startDate": {
+            "description": "Calendar date, YYYY-MM-DD.",
+            "type": "string",
+            "format": "date",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+          },
+          "partySize": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 40
+          },
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "VACATION",
+              "BUSINESS",
+              "HONEYMOON",
+              "FAMILY",
+              "SOLO",
+              "GROUP",
+              "OTHER"
+            ]
+          },
+          "pace": {
+            "type": "string",
+            "enum": [
+              "RELAXED",
+              "BALANCED",
+              "PACKED"
+            ]
+          },
+          "transportPreference": {
+            "type": "string",
+            "enum": [
+              "PRIVATE_CAR",
+              "SELF_DRIVE",
+              "PUBLIC_TRANSIT",
+              "WALKING",
+              "MIXED"
+            ]
+          },
+          "budgetBand": {
+            "type": "string",
+            "enum": [
+              "BUDGET",
+              "MID_RANGE",
+              "PREMIUM",
+              "LUXURY"
+            ]
+          },
+          "interests": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "mobilityNotes": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "mustSee": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "avoid": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "interests",
+          "mustSee",
+          "avoid"
+        ],
+        "additionalProperties": false,
+        "description": "Everything known about the trip so far."
+      },
+      "TripBriefInput": {
+        "type": "object",
+        "properties": {
+          "destination": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "destinationId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "totalDays": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 30
+          },
+          "startDate": {
+            "description": "Calendar date, YYYY-MM-DD.",
+            "type": "string",
+            "format": "date",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+          },
+          "partySize": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 40
+          },
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "VACATION",
+              "BUSINESS",
+              "HONEYMOON",
+              "FAMILY",
+              "SOLO",
+              "GROUP",
+              "OTHER"
+            ]
+          },
+          "pace": {
+            "type": "string",
+            "enum": [
+              "RELAXED",
+              "BALANCED",
+              "PACKED"
+            ]
+          },
+          "transportPreference": {
+            "type": "string",
+            "enum": [
+              "PRIVATE_CAR",
+              "SELF_DRIVE",
+              "PUBLIC_TRANSIT",
+              "WALKING",
+              "MIXED"
+            ]
+          },
+          "budgetBand": {
+            "type": "string",
+            "enum": [
+              "BUDGET",
+              "MID_RANGE",
+              "PREMIUM",
+              "LUXURY"
+            ]
+          },
+          "interests": {
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80
+            }
+          },
+          "mobilityNotes": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "mustSee": {
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            }
+          },
+          "avoid": {
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            }
+          }
+        },
+        "description": "Facts about the trip. Sending a field overwrites it; omitting one leaves it untouched."
+      },
+      "UpdateBlockBody": {
+        "type": "object",
+        "properties": {
+          "startMinute": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1439,
+            "description": "Minutes from local midnight, 0–1439. 540 is 09:00."
+          },
+          "endMinute": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2880,
+            "description": "Minutes from the same local midnight. Above 1440 runs into the next morning."
+          },
+          "dayNumber": {
+            "description": "Move the block to another day of the same trip.",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 30
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "isLocked": {
+            "type": "boolean"
+          },
+          "transitMode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "WALK",
+                  "CAR",
+                  "TAXI",
+                  "RIDESHARE",
+                  "BUS",
+                  "TRAIN",
+                  "FERRY",
+                  "BOAT",
+                  "FLIGHT",
+                  "BICYCLE"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "UpdateItineraryBody": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "startDate": {
+            "description": "Re-dates every day, which changes which opening-hours warnings apply.",
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "partySize": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 40
+          },
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "VACATION",
+              "BUSINESS",
+              "HONEYMOON",
+              "FAMILY",
+              "SOLO",
+              "GROUP",
+              "OTHER"
+            ]
+          },
+          "pace": {
+            "type": "string",
+            "enum": [
+              "RELAXED",
+              "BALANCED",
+              "PACKED"
+            ]
+          },
+          "transportPreference": {
+            "description": "Re-estimates every transfer we drew. Transfers you authored are untouched.",
+            "type": "string",
+            "enum": [
+              "PRIVATE_CAR",
+              "SELF_DRIVE",
+              "PUBLIC_TRANSIT",
+              "WALKING",
+              "MIXED"
+            ]
+          },
+          "budgetBand": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "BUDGET",
+                  "MID_RANGE",
+                  "PREMIUM",
+                  "LUXURY"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "coverImageUrl": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "UpgradeOffer": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "SIGN_IN",
+              "UNLOCK_ITINERARY",
+              "SUBSCRIBE"
+            ]
+          },
+          "planCode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "FREE",
+                  "UNLOCK_SINGLE",
+                  "PREMIUM_10",
+                  "PREMIUM_50",
+                  "PREMIUM_100"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "priceBdt": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Whole taka. `0` for SIGN_IN, which costs nothing. `null` for SUBSCRIBE, where the price depends on the tier chosen — read it from GET /api/v1/plans."
+          },
+          "label": {
+            "type": "string"
+          },
+          "itineraryId": {
+            "description": "Present for UNLOCK_ITINERARY: the itinerary the one-off payment would unlock.",
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          }
+        },
+        "required": [
+          "action",
+          "planCode",
+          "priceBdt",
+          "label"
+        ],
+        "additionalProperties": false
+      },
+      "UserSessionResponse": {
+        "type": "object",
+        "properties": {
+          "accessToken": {
+            "type": "string"
+          },
+          "refreshToken": {
+            "type": "string"
+          },
+          "expiresIn": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Lifetime of accessToken, in seconds."
+          },
+          "user": {
+            "$ref": "#/components/schemas/PublicUser"
+          }
+        },
+        "required": [
+          "accessToken",
+          "refreshToken",
+          "expiresIn",
+          "user"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+}

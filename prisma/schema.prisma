@@ -1,0 +1,1072 @@
+// Beyond Borders — admin/API database schema.
+// This project is the sole owner of the database. The public web app never
+// connects to Postgres; it reaches this data through /api/v1.
+//
+// Phase 0 covers identity, sessions, settings and audit. Later phases add
+// catalog, packages, planner, itineraries, quotes, commerce and past trips.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Identity
+//
+// Travellers and staff live in SEPARATE tables, signed with separate JWT
+// secrets. There is deliberately no `isAdmin` flag on a user: privilege cannot
+// be gained by mutating a row the user can influence.
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  DELETED
+}
+
+enum AdminRole {
+  SUPER_ADMIN // full access, including managing other admins
+  OPS // quotes, bookings, payments, departures
+  CONTENT // packages, trips, polls, media moderation
+  SUPPORT // read-only plus replying to inquiries
+}
+
+enum AdminStatus {
+  ACTIVE
+  DISABLED
+}
+
+model User {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  /// Always stored lowercased and trimmed — normalise via normalizeEmail()
+  /// before any read or write, since Postgres unique indexes are case-sensitive.
+  email        String  @unique
+  passwordHash String
+  name         String
+  phone        String?
+  avatarUrl    String?
+
+  status          UserStatus @default(ACTIVE)
+  emailVerifiedAt DateTime?
+  lastLoginAt     DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  refreshTokens      UserRefreshToken[]
+  passwordResets     PasswordReset[]
+  emailVerifications EmailVerification[]
+
+  subscriptions    Subscription[]
+  itineraryUnlocks ItineraryUnlock[]
+  usageCounters    UsageCounter[]
+  payments         Payment[]
+  plannerSessions  PlannerSession[]
+  itineraries      Itinerary[]
+  /// Anonymous visitors that later became this account.
+  convertedFrom    AnonymousVisitor[]
+
+  @@index([status])
+  @@index([createdAt])
+  @@map("users")
+}
+
+model AdminUser {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  email        String  @unique
+  passwordHash String
+  name         String
+  avatarUrl    String?
+
+  role   AdminRole
+  status AdminStatus @default(ACTIVE)
+
+  lastLoginAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  refreshTokens AdminRefreshToken[]
+  auditLogs     AuditLog[]
+  settings      Setting[]
+
+  @@index([role])
+  @@index([status])
+  @@map("admin_users")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sessions
+//
+// Refresh tokens rotate on every use. We store only a SHA-256 hash, so a
+// database leak does not yield usable tokens.
+//
+// `familyId` groups every token descended from one login. When a token that has
+// already been rotated is presented again, that means a copy leaked — we revoke
+// the whole family rather than just the replayed token.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model UserRefreshToken {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  userId String @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// SHA-256 of the raw token. The raw value is returned to the client once and
+  /// never persisted.
+  tokenHash String @unique
+
+  /// Shared by every token descended from a single login.
+  familyId String @db.Uuid
+
+  expiresAt DateTime
+
+  /// Absolute deadline for the whole family, fixed at login and copied
+  /// unchanged onto every successor. Without it, rotation slides `expiresAt`
+  /// forward on each use, so a stolen token refreshed once a month would grant
+  /// access forever without the password ever being re-entered.
+  familyExpiresAt DateTime
+
+  revokedAt DateTime?
+
+  /// Set when this token is rotated, forming the chain used for reuse detection.
+  replacedByTokenId String?           @unique @db.Uuid
+  replacedByToken   UserRefreshToken? @relation("UserTokenRotation", fields: [replacedByTokenId], references: [id], onDelete: SetNull)
+  replaces          UserRefreshToken? @relation("UserTokenRotation")
+
+  /// Truncated UA string and a salted hash of the IP — enough to spot anomalies
+  /// without storing raw addresses.
+  userAgent String?
+  ipHash    String?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([familyId])
+  @@index([expiresAt])
+  @@map("user_refresh_tokens")
+}
+
+model AdminRefreshToken {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  adminUserId String    @db.Uuid
+  adminUser   AdminUser @relation(fields: [adminUserId], references: [id], onDelete: Cascade)
+
+  tokenHash String @unique
+  familyId  String @db.Uuid
+
+  expiresAt DateTime
+
+  /// Absolute deadline for the family. See UserRefreshToken.familyExpiresAt —
+  /// staff sessions need this bound at least as much as travellers', since
+  /// there is no admin self-service password reset to fall back on.
+  familyExpiresAt DateTime
+
+  revokedAt DateTime?
+
+  replacedByTokenId String?            @unique @db.Uuid
+  replacedByToken   AdminRefreshToken? @relation("AdminTokenRotation", fields: [replacedByTokenId], references: [id], onDelete: SetNull)
+  replaces          AdminRefreshToken? @relation("AdminTokenRotation")
+
+  userAgent String?
+  ipHash    String?
+
+  createdAt DateTime @default(now())
+
+  @@index([adminUserId])
+  @@index([familyId])
+  @@index([expiresAt])
+  @@map("admin_refresh_tokens")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Account lifecycle tokens
+//
+// Also hashed at rest, also single-use. Requesting a reset for an unknown email
+// must still return success at the API layer, so these tables are never used to
+// probe which addresses are registered.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model PasswordReset {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  userId String @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+
+  ipHash    String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("password_resets")
+}
+
+model EmailVerification {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  userId String @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// The address being verified — recorded separately so a pending change of
+  /// email cannot be confirmed onto a different address than it was issued for.
+  email String
+
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("email_verifications")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Operations
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Runtime configuration editable from the admin console without a redeploy:
+/// payment instructions, company details, AI model choice, feature flags.
+model Setting {
+  key         String  @id
+  value       Json
+  description String?
+  /// Settings marked public are safe to expose through the API to the website.
+  isPublic    Boolean @default(false)
+
+  updatedAt        DateTime   @updatedAt
+  updatedByAdminId String?    @db.Uuid
+  updatedByAdmin   AdminUser? @relation(fields: [updatedByAdminId], references: [id], onDelete: SetNull)
+
+  @@map("settings")
+}
+
+model AuditLog {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  /// Who acted. Both null means the action was taken by the system itself.
+  adminUserId String?    @db.Uuid
+  adminUser   AdminUser? @relation(fields: [adminUserId], references: [id], onDelete: SetNull)
+  userId      String?    @db.Uuid
+
+  /// Verb in past tense, e.g. "quote.sent", "package.published".
+  action     String
+  entityType String
+  entityId   String?
+
+  /// Field-level snapshots. Never store password hashes or raw tokens here.
+  before Json?
+  after  Json?
+
+  ipHash    String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([adminUserId])
+  @@index([userId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Billing & entitlements
+//
+// Every amount in this file is whole Bangladeshi taka stored as Int. There is
+// no minor unit in circulation (the poisha is dead), and float money in a
+// planner that sums dozens of block costs would drift visibly. USD is a display
+// convenience computed from the admin-set `bdtPerUsd` setting; it is never
+// stored.
+//
+// A null on a Plan limit means UNLIMITED, not zero. Enforcement code must test
+// `limit === null` before comparing, or the most expensive tier becomes the
+// most restrictive one.
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum PlanCode {
+  FREE // logged in, 2-day itineraries, 3 saved
+  UNLOCK_SINGLE // 200 BDT, one itinerary, forever
+  PREMIUM_10
+  PREMIUM_50
+  PREMIUM_100
+}
+
+enum BillingInterval {
+  NONE // one-off purchase or the free tier
+  MONTHLY
+}
+
+enum SubscriptionStatus {
+  PENDING // created, payment not yet settled
+  ACTIVE
+  EXPIRED
+  CANCELLED
+}
+
+enum PaymentProvider {
+  BKASH
+  SSLCOMMERZ
+  MANUAL_BANK // large trip bookings settled by bank transfer
+}
+
+enum PaymentPurpose {
+  ITINERARY_UNLOCK
+  SUBSCRIPTION
+  BOOKING
+}
+
+enum PaymentStatus {
+  INITIATED // row created before the user was sent to the gateway
+  PENDING // gateway acknowledged, awaiting callback
+  SUCCEEDED
+  FAILED
+  REFUNDED
+}
+
+/// A sellable entitlement tier. Rows are seeded and edited from the admin
+/// console; code reads them by `code`, never by id, so seeding order is free.
+model Plan {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  code        PlanCode @unique
+  name        String
+  description String
+
+  priceBdt Int
+  interval BillingInterval @default(NONE)
+
+  /// null = unlimited on all four. FREE is 3 / 2 / null / 30.
+  maxSavedItineraries  Int?
+  maxItineraryDays     Int?
+  itinerariesPerPeriod Int?
+
+  /// AI planner turns per period, metered against UsageCounter.aiPromptsUsed.
+  ///
+  /// Separate from `itinerariesPerPeriod` because the two meter different
+  /// things: an itinerary is the product, a prompt is the spend. Without this
+  /// column a FREE account — which is deliberately unmetered per period, since
+  /// its 3-saved ceiling bounds what it can KEEP — has nothing at all bounding
+  /// what it can ASK, and every planner turn is a paid model call. `null` means
+  /// unmetered and is reserved for tiers we are happy to leave uncapped.
+  aiPromptsPerPeriod   Int?
+
+  isActive  Boolean @default(true)
+  sortOrder Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  subscriptions Subscription[]
+
+  @@index([isActive, sortOrder])
+  @@map("plans")
+}
+
+model Subscription {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  userId String @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  planId String @db.Uuid
+  plan   Plan   @relation(fields: [planId], references: [id], onDelete: Restrict)
+
+  status SubscriptionStatus @default(PENDING)
+
+  startedAt DateTime @default(now())
+
+  /// Also the reset boundary for the matching UsageCounter period.
+  currentPeriodEnd DateTime
+
+  /// Set when the user cancels. The subscription still runs to
+  /// `currentPeriodEnd` — cancelling is not a refund.
+  cancelledAt DateTime?
+
+  /// Unique: one settled payment funds exactly one period. A renewal is a new
+  /// payment and a new row, so a replayed callback cannot extend two periods.
+  paymentId String?  @unique @db.Uuid
+  payment   Payment? @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, status])
+  @@index([currentPeriodEnd])
+  @@map("subscriptions")
+}
+
+/// The 200 BDT one-off: full length of ONE itinerary, forever. Deliberately a
+/// row rather than a flag, so the grant survives independently of the
+/// itinerary's own `isFullyUnlocked` denormalisation and can be audited.
+model ItineraryUnlock {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  userId String @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  itineraryId String    @db.Uuid
+  itinerary   Itinerary @relation(fields: [itineraryId], references: [id], onDelete: Cascade)
+
+  paymentId String?  @unique @db.Uuid
+  payment   Payment? @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+
+  unlockedAt DateTime @default(now())
+
+  /// Buying the same itinerary twice is a bug, not a second grant.
+  @@unique([userId, itineraryId])
+  @@index([itineraryId])
+  @@map("itinerary_unlocks")
+}
+
+/// Consumption within one billing period. Kept separate from Subscription so
+/// that free users — who have no subscription row — are still metered, and so
+/// that history survives a plan change.
+model UsageCounter {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  userId String @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  periodStart DateTime
+  periodEnd   DateTime
+
+  itinerariesCreated Int @default(0)
+  aiPromptsUsed      Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// Lets the meter be an upsert-then-increment, which is race-free under
+  /// concurrent generation requests.
+  @@unique([userId, periodStart])
+  @@index([userId, periodEnd])
+  @@map("usage_counters")
+}
+
+/// One row per payment attempt, across every provider. `userId` is nullable and
+/// detaches rather than cascades: a deleted account must not erase the
+/// financial record.
+model Payment {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  userId String? @db.Uuid
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  provider PaymentProvider
+  purpose  PaymentPurpose
+
+  amountBdt Int
+  status    PaymentStatus @default(INITIATED)
+
+  /// The provider's own transaction id (bKash trxID, SSLCommerz val_id, or the
+  /// bank reference typed in by ops).
+  providerRef String?
+
+  /// Supplied by the caller and unique across all providers. Gateways retry
+  /// callbacks; without this a double-fire charges or grants twice.
+  idempotencyKey String @unique
+
+  /// Verbatim provider callback, kept for dispute resolution. Never trusted as
+  /// the source of truth for `status` or `amountBdt`.
+  rawPayload Json?
+
+  createdAt DateTime  @default(now())
+  settledAt DateTime?
+  updatedAt DateTime  @updatedAt
+
+  subscription Subscription?
+  unlock       ItineraryUnlock?
+
+  @@index([userId, status])
+  @@index([provider, providerRef])
+  @@index([status, createdAt])
+  @@map("payments")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Anonymous access & abuse control
+//
+// An anonymous visitor gets exactly one AI prompt, ever. Identity is the union
+// of three weak signals — signed cookie, hashed IP, hashed device fingerprint —
+// and a hit on ANY ONE of them is the same visitor. Cookie clearing, incognito
+// and a fresh fingerprint each defeat one signal alone; they do not defeat the
+// union.
+//
+// Raw IPs are never stored, only salted hashes, so this table cannot be turned
+// into a location log.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model AnonymousVisitor {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  /// Value inside the signed cookie. Unique because it is the strongest of the
+  /// three signals and the one we mint ourselves.
+  cookieId String @unique
+
+  ipHash          String
+  fingerprintHash String
+
+  promptsUsed Int @default(0)
+
+  firstSeenAt DateTime @default(now())
+  /// Written explicitly on each visit, not via @updatedAt, so that bumping an
+  /// unrelated column does not forge activity.
+  lastSeenAt  DateTime @default(now())
+
+  /// Set when this visitor registers. Their teaser session is then adopted by
+  /// the account instead of being thrown away.
+  convertedUserId String? @db.Uuid
+  convertedUser   User?   @relation(fields: [convertedUserId], references: [id], onDelete: SetNull)
+
+  plannerSessions PlannerSession[]
+
+  /// Non-unique by design: many visitors share an IP (NAT, mobile carriers) and
+  /// many share a fingerprint (same phone model, same browser). These are
+  /// lookup indexes for the "any signal matches" query, not identities.
+  @@index([ipHash])
+  @@index([fingerprintHash])
+  @@index([convertedUserId])
+  @@map("anonymous_visitors")
+}
+
+/// Teaser replies keyed on the four questionnaire answers. The anonymous reply
+/// is generated from a fixed questionnaire, not free-form chat, so the input
+/// space is small and cacheable. Bypass attempts — new cookie, new device —
+/// therefore cost no AI spend at all, which is the whole point of caching here
+/// rather than trusting the visitor table alone.
+model TeaserCache {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  /// sha256 of `destination|days|partySize|purpose`, each normalised
+  /// (trimmed, lowercased, whitespace collapsed) before hashing.
+  cacheKey String @unique
+
+  payload  Json
+  hitCount Int  @default(0)
+
+  createdAt DateTime  @default(now())
+  lastHitAt DateTime?
+
+  @@index([hitCount])
+  @@map("teaser_cache")
+}
+
+/// Fixed-window counters for the rate limiter in server/http/rate-limit.ts.
+///
+/// In Postgres rather than in a Map, because a Map is per process. Two
+/// instances behind a load balancer would grant two allowances, an autoscaler
+/// grants one per new pod, and a cold start resets the count to zero — a limit
+/// an attacker multiplies by retrying is not a limit. Shared state is the whole
+/// requirement, and the database is the shared state we already have.
+model RateLimitBucket {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  /// What is being limited, e.g. `teaser:ip:<digest>`. Never a raw address:
+  /// this table would otherwise become a log of who asked for what and when,
+  /// for the same people the limiter exists to meter rather than to watch.
+  bucketKey String
+
+  /// Start of the window this row counts, floored to the window length.
+  windowStart DateTime
+
+  /// Hits in this window, including refused ones — hammering a closed window
+  /// must not shorten it.
+  hits Int @default(0)
+
+  createdAt DateTime @default(now())
+
+  /// One row per key per window. The upsert-and-increment in rate-limit.ts is
+  /// atomic only because this constraint gives the conflict an unambiguous
+  /// target; without it two concurrent requests each insert a row and the
+  /// counter reads 1 twice instead of 2.
+  @@unique([bucketKey, windowStart])
+  /// Pruning old windows reads this and nothing else.
+  @@index([windowStart])
+  @@map("rate_limit_buckets")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Catalog
+//
+// The AI is grounded on these tables and may only recommend rows that exist
+// here. It is a salesperson for real, sellable inventory, not a travel writer:
+// an invented activity is a defect, because ops cannot book it and the price is
+// fiction.
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum ActivityCategory {
+  SIGHTSEEING
+  ADVENTURE
+  WATER_SPORTS
+  CULTURE
+  FOOD
+  WELLNESS
+  NIGHTLIFE
+  SHOPPING
+  NATURE
+  TRANSPORT
+}
+
+enum TimeOfDay {
+  ANY
+  EARLY_MORNING
+  MORNING
+  AFTERNOON
+  EVENING
+  NIGHT
+}
+
+enum ActivityIntensity {
+  RELAXED
+  MODERATE
+  ACTIVE
+}
+
+model Destination {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  slug    String  @unique
+  name    String
+  country String
+  region  String?
+  summary String
+
+  heroImageUrl String?
+
+  /// Decimal(9,6) holds ±180.000000 exactly: ~11 cm of precision, and no
+  /// binary-float rounding when a coordinate makes a round trip through JSON.
+  latitude  Decimal? @db.Decimal(9, 6)
+  longitude Decimal? @db.Decimal(9, 6)
+
+  /// IANA zone, e.g. "Asia/Dhaka". Every minutes-from-midnight value in an
+  /// itinerary for this destination is local time in this zone.
+  timezone String
+
+  isActive  Boolean @default(true)
+  sortOrder Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  activities  Activity[]
+  itineraries Itinerary[]
+
+  @@index([isActive, sortOrder])
+  @@index([country])
+  @@map("destinations")
+}
+
+model Activity {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  slug String @unique
+
+  destinationId String      @db.Uuid
+  destination   Destination @relation(fields: [destinationId], references: [id], onDelete: Cascade)
+
+  name        String
+  /// One line for cards and for the AI's shortlist prompt.
+  summary     String
+  /// Full prose for the detail view.
+  description String
+
+  category ActivityCategory
+
+  /// Excludes travel to and from. The planner adds TRANSIT blocks for that.
+  durationMinutes Int
+
+  /// null means "price on request" — free sights and anything ops quotes case
+  /// by case. `priceNote` carries the nuance ("entry only", "per boat").
+  pricePerPersonBdt Int?
+  priceNote         String?
+
+  latitude  Decimal? @db.Decimal(9, 6)
+  longitude Decimal? @db.Decimal(9, 6)
+
+  bestTimeOfDay TimeOfDay @default(ANY)
+
+  minPartySize Int?
+  maxPartySize Int?
+
+  intensity       ActivityIntensity @default(MODERATE)
+  bookingRequired Boolean           @default(false)
+
+  isActive  Boolean @default(true)
+  /// Where the curator verified price and hours, for the next content review.
+  sourceUrl String?
+  sortOrder Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  images       ActivityImage[]
+  tags         ActivityTag[]
+  openingHours ActivityOpeningHours[]
+  blocks       ItineraryBlock[]
+
+  @@index([destinationId, isActive])
+  @@index([category])
+  @@index([destinationId, category, isActive])
+  @@map("activities")
+}
+
+model ActivityImage {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  activityId String   @db.Uuid
+  activity   Activity @relation(fields: [activityId], references: [id], onDelete: Cascade)
+
+  url String
+  /// Required, not optional: an image with no alt text is inaccessible, and
+  /// making the column nullable guarantees someone ships one.
+  alt String
+
+  sortOrder Int @default(0)
+
+  createdAt DateTime @default(now())
+
+  @@index([activityId, sortOrder])
+  @@map("activity_images")
+}
+
+/// Interest vocabulary used to match a trip brief to inventory: snorkelling,
+/// temples, street food, and so on.
+model Tag {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  slug  String @unique
+  label String
+
+  createdAt DateTime @default(now())
+
+  activities ActivityTag[]
+
+  @@map("tags")
+}
+
+model ActivityTag {
+  activityId String   @db.Uuid
+  activity   Activity @relation(fields: [activityId], references: [id], onDelete: Cascade)
+
+  tagId String @db.Uuid
+  tag   Tag    @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([activityId, tagId])
+  @@index([tagId])
+  @@map("activity_tags")
+}
+
+/// Opening hours as minutes from local midnight, matching ItineraryBlock so
+/// that "is this activity open during this block" is integer comparison.
+///
+/// Convention: an activity with NO rows at all is always available (a public
+/// beach, a viewpoint). Once an activity has any row, a weekday with no row is
+/// CLOSED that day. `closesMinute` may exceed 1440 for venues that run past
+/// midnight — 1560 is 02:00 the next morning.
+model ActivityOpeningHours {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  activityId String   @db.Uuid
+  activity   Activity @relation(fields: [activityId], references: [id], onDelete: Cascade)
+
+  /// 0 = Sunday … 6 = Saturday, matching JavaScript's getDay().
+  dayOfWeek Int
+
+  opensMinute  Int
+  closesMinute Int
+
+  /// Not unique on (activityId, dayOfWeek): venues with a midday break need two
+  /// windows on the same day.
+  @@index([activityId, dayOfWeek])
+  @@map("activity_opening_hours")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Planner
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum PlannerSessionStatus {
+  ACTIVE
+  CONVERTED // became a saved itinerary
+  ABANDONED
+}
+
+enum PlannerMessageRole {
+  USER
+  ASSISTANT
+  SYSTEM
+  TOOL
+}
+
+/// One planning conversation. Owned by EXACTLY ONE of a user or an anonymous
+/// visitor — never both, never neither. The database enforces this with a CHECK
+/// constraint added in the migration, because Prisma cannot express it and
+/// "the service layer always sets one" is not a constraint.
+model PlannerSession {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  userId String? @db.Uuid
+  user   User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  anonymousVisitorId String?           @db.Uuid
+  anonymousVisitor   AnonymousVisitor? @relation(fields: [anonymousVisitorId], references: [id], onDelete: Cascade)
+
+  status PlannerSessionStatus @default(ACTIVE)
+
+  /// The structured brief: destination, days, party size, purpose, interests,
+  /// budget. Json rather than columns because it is the model's input contract
+  /// and will gain fields faster than migrations are worth.
+  tripBrief Json
+
+  createdAt     DateTime @default(now())
+  lastMessageAt DateTime @default(now())
+
+  messages    PlannerMessage[]
+  itineraries Itinerary[]
+
+  @@index([userId])
+  @@index([anonymousVisitorId])
+  @@index([status, lastMessageAt])
+  @@map("planner_sessions")
+}
+
+model PlannerMessage {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  sessionId String         @db.Uuid
+  session   PlannerSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  role    PlannerMessageRole
+  content String
+
+  /// Tool invocations and their results, for replaying how a recommendation
+  /// was reached — chiefly which catalog rows were retrieved.
+  toolCalls Json?
+
+  /// Recorded per message, not per session: the configured model can change
+  /// mid-conversation, and cost attribution must survive that.
+  model            String?
+  promptTokens     Int?
+  completionTokens Int?
+
+  createdAt DateTime @default(now())
+
+  @@index([sessionId, createdAt])
+  @@map("planner_messages")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Itineraries
+//
+// Times are Int minutes from local midnight rather than DateTime. Two blocks
+// overlap iff `aStart < bEnd && bStart < aEnd` — plain integer arithmetic, no
+// timezone, no DST, and the Gantt renders straight from these numbers.
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum TripPurpose {
+  VACATION
+  BUSINESS
+  HONEYMOON
+  FAMILY
+  SOLO
+  GROUP
+  OTHER
+}
+
+enum TripPace {
+  RELAXED
+  BALANCED
+  PACKED
+}
+
+enum TransportPreference {
+  PRIVATE_CAR
+  SELF_DRIVE
+  PUBLIC_TRANSIT
+  WALKING
+  MIXED
+}
+
+enum BudgetBand {
+  BUDGET
+  MID_RANGE
+  PREMIUM
+  LUXURY
+}
+
+enum ItineraryStatus {
+  DRAFT
+  SAVED
+  SUBMITTED // sent to ops for a quote
+  QUOTED
+  ACCEPTED
+  BOOKED
+  COMPLETED
+  CANCELLED
+}
+
+enum ItineraryBlockKind {
+  ACTIVITY
+  TRANSIT
+  MEAL
+  REST
+  FREE
+  ACCOMMODATION
+}
+
+enum TransitMode {
+  WALK
+  CAR
+  TAXI
+  RIDESHARE
+  BUS
+  TRAIN
+  FERRY
+  BOAT
+  FLIGHT
+  BICYCLE
+}
+
+model Itinerary {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  userId String @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  plannerSessionId String?         @db.Uuid
+  plannerSession   PlannerSession? @relation(fields: [plannerSessionId], references: [id], onDelete: SetNull)
+
+  title String
+
+  destinationId String?      @db.Uuid
+  destination   Destination? @relation(fields: [destinationId], references: [id], onDelete: SetNull)
+
+  /// What the traveller called the place, kept even when `destinationId` is
+  /// null or later repointed. "Cox's Bazar & Saint Martin's" is a valid label
+  /// with no single catalog row behind it.
+  destinationLabel String
+
+  startDate DateTime? @db.Date
+  endDate   DateTime? @db.Date
+
+  totalDays Int
+  partySize Int
+
+  purpose             TripPurpose         @default(VACATION)
+  pace                TripPace            @default(BALANCED)
+  transportPreference TransportPreference @default(MIXED)
+  budgetBand          BudgetBand?
+
+  status ItineraryStatus @default(DRAFT)
+
+  /// Denormalised from ItineraryUnlock / an active subscription so the list
+  /// view does not join per row. ItineraryUnlock remains the record of truth;
+  /// this is a cache and must be recomputed, never edited by hand.
+  isFullyUnlocked Boolean @default(false)
+
+  coverImageUrl String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  days    ItineraryDay[]
+  unlocks ItineraryUnlock[]
+
+  @@index([userId, status])
+  @@index([destinationId])
+  @@index([plannerSessionId])
+  @@map("itineraries")
+}
+
+model ItineraryDay {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  itineraryId String    @db.Uuid
+  itinerary   Itinerary @relation(fields: [itineraryId], references: [id], onDelete: Cascade)
+
+  /// 1-based. Day 1 is the first day of the trip, not an index.
+  dayNumber Int
+
+  date  DateTime? @db.Date
+  title String?
+  notes String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  blocks ItineraryBlock[]
+
+  /// Free-tier truncation and paid unlock both work by day number, so
+  /// duplicates would make "the first 2 days" ambiguous.
+  @@unique([itineraryId, dayNumber])
+  @@map("itinerary_days")
+}
+
+model ItineraryBlock {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  dayId String       @db.Uuid
+  day   ItineraryDay @relation(fields: [dayId], references: [id], onDelete: Cascade)
+
+  kind ItineraryBlockKind
+
+  /// Set for kind = ACTIVITY, and it must point at a real catalog row: this FK
+  /// is what stops the model inventing inventory. SetNull rather than Cascade
+  /// so retiring an activity does not silently delete a booked plan.
+  activityId String?   @db.Uuid
+  activity   Activity? @relation(fields: [activityId], references: [id], onDelete: SetNull)
+
+  title       String
+  description String?
+
+  /// Minutes from local midnight. `endMinute` may exceed 1440 for a block that
+  /// runs past midnight; the migration enforces endMinute > startMinute.
+  startMinute Int
+  endMinute   Int
+
+  transitMode TransitMode?
+
+  /// For a TRANSIT block, the block being travelled away from — this is how the
+  /// Gantt draws the connector.
+  transitFromBlockId String?          @db.Uuid
+  transitFromBlock   ItineraryBlock?  @relation("BlockTransit", fields: [transitFromBlockId], references: [id], onDelete: SetNull)
+  transitTo          ItineraryBlock[] @relation("BlockTransit")
+
+  /// Pinned by the traveller. Regeneration must plan around a locked block
+  /// rather than move it.
+  isLocked Boolean @default(false)
+
+  /// True when WE computed this block rather than a person authoring it —
+  /// today that means an auto-inserted TRANSIT block whose duration came from a
+  /// straight-line distance estimate rather than from a routing service. The
+  /// planner may recompute or drop its own estimates freely; it must never
+  /// touch a block a traveller placed. Without this column the two are
+  /// indistinguishable, and "resync the transfers" quietly deletes the ferry
+  /// time somebody typed in by hand.
+  isEstimate Boolean @default(false)
+
+  sortOrder Int @default(0)
+
+  /// Whole BDT for the whole block (already multiplied by party size where
+  /// that applies), null when nothing is charged.
+  costBdt Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([dayId, startMinute])
+  @@index([activityId])
+  @@index([transitFromBlockId])
+  @@map("itinerary_blocks")
+}
