@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import type { ReactNode } from 'react'
+import { signOut } from '../login/actions'
 import { readConsoleAdmin } from './_lib/console-session'
 
 /**
@@ -30,7 +31,9 @@ export default async function AdminLayout({ children }: { children: ReactNode })
     <div className="flex min-h-full flex-1 flex-col bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
       <header className="border-b border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
         <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center gap-x-6 gap-y-2 px-6 py-4">
-          <span className="text-sm font-semibold tracking-tight">Beyond Borders</span>
+          <Link href="/" className="text-sm font-semibold tracking-tight">
+            Beyond Borders
+          </Link>
 
           <nav className="flex gap-4 text-sm">
             {NAV.map((item) => (
@@ -44,9 +47,27 @@ export default async function AdminLayout({ children }: { children: ReactNode })
             ))}
           </nav>
 
-          <span className="ml-auto text-xs text-zinc-500 dark:text-zinc-400">
-            {admin ? `Signed in · ${admin.role}` : 'Not signed in'}
-          </span>
+          <div className="ml-auto flex items-center gap-3 text-xs text-zinc-500 dark:text-zinc-400">
+            {admin ? (
+              <>
+                <span>Signed in · {admin.role}</span>
+                {/* A plain form, so signing out needs no client JavaScript and
+                    cannot be triggered by a cross-site GET. */}
+                <form action={signOut}>
+                  <button
+                    type="submit"
+                    className="underline underline-offset-4 hover:text-zinc-900 dark:hover:text-zinc-100"
+                  >
+                    Sign out
+                  </button>
+                </form>
+              </>
+            ) : (
+              <Link href="/login" className="underline underline-offset-4">
+                Sign in
+              </Link>
+            )}
+          </div>
         </div>
       </header>
 
