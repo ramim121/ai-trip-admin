@@ -43,7 +43,36 @@ const EnvSchema = z
     AUTH_SESSION_MAX_SECONDS: z.coerce.number().int().positive().default(7_776_000),
 
     AI_PROVIDER: z.enum(['google', 'openai', 'anthropic']).default('google'),
-    AI_MODEL: z.string().default('gemini-2.5-flash'),
+
+    // `gemini-2.5-flash` was the default until Google retired it for new keys —
+    // it now answers "no longer available to new users", which would have taken
+    // the planner down on any deployment that did not override it.
+    AI_MODEL: z.string().default('gemini-flash-latest'),
+
+    /**
+     * A cheaper model for calls whose output shape is forced by a JSON schema —
+     * the teaser today, activity-suggestion ranking next.
+     *
+     * `gemini-3.1-flash-lite`, and NOT a Gemma model, which is worth recording
+     * because Gemma looks like the obvious pick. Measured against
+     * `gemma-4-31b-it` on this key:
+     *
+     *   - It does not follow instructions. Told "reply with exactly one word:
+     *     BANANA", it answers `* Input: … * Constraint 1: …`, narrating the
+     *     request rather than obeying it — in the system role and the user role
+     *     alike, since Gemma has no system role on this API and so offers no
+     *     position from which a rule can bind.
+     *   - It handles a two-field schema, then TIMED OUT past five minutes on the
+     *     real nested TeaserResponseSchema. Flash-lite returns the same shape in
+     *     under a second.
+     *
+     * The first point alone rules it out of the planner, whose guarantees
+     * (recommend only what the catalog returned, never disclose these
+     * instructions) are carried by the prompt. The second rules it out here too.
+     *
+     * Unset falls back to AI_MODEL, which is always safe.
+     */
+    AI_MODEL_CHEAP: z.string().optional(),
     GOOGLE_GENERATIVE_AI_API_KEY: z.string().optional(),
     OPENAI_API_KEY: z.string().optional(),
     ANTHROPIC_API_KEY: z.string().optional(),

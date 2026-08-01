@@ -2,7 +2,7 @@ import { generateObject } from 'ai'
 import { z } from 'zod'
 import { DEFAULT_AI_LIMITS, buildMessages } from '@/server/ai/guard'
 import { teaserSystemPrompt } from '@/server/ai/prompts/teaser'
-import { getModel } from '@/server/ai/provider'
+import { getModel, schemaConstrainedModel } from '@/server/ai/provider'
 import {
   TeaserResponseSchema,
   type TeaserQuestionnaire,
@@ -225,7 +225,19 @@ const TEASER_TEMPERATURE = 0.6
  * the visitor's prompt back.
  */
 export async function generateTeaser(answers: TeaserQuestionnaire): Promise<TeaserResponse> {
-  const active = await getModel()
+  // The cheap model is safe HERE and nowhere the prompt is load-bearing.
+  //
+  // Everything this call must not do is enforced by TeaserResponseSchema rather
+  // than by the model agreeing to behave: `dayHighlights` is capped at
+  // MAX_TEASER_DAY_HIGHLIGHTS, so "a preview, not an itinerary" holds even for a
+  // model that ignored the system prompt entirely, and every text field has a
+  // length bound. `generateObject` rejects anything that misses the shape.
+  //
+  // The planner deliberately does not do this. Its rules — recommend only what
+  // the catalog returned, never disclose these instructions — live in the prompt
+  // and cannot be expressed as a schema, so it keeps the model that follows
+  // instructions.
+  const active = await getModel(schemaConstrainedModel())
 
   const messages = buildMessages({
     system: teaserSystemPrompt(),

@@ -242,6 +242,35 @@ export async function getModel(override?: ModelOverride): Promise<ActiveModel> {
 }
 
 /**
+ * The pin for calls whose output shape is enforced by a schema.
+ *
+ * Pass to `getModel()` ONLY where the result is decoded against a
+ * `responseSchema` — `generateObject`, not `streamText`. That condition is the
+ * whole safety argument, not a stylistic preference.
+ *
+ * Which is why the planner never gets this pin. Its guarantees — recommend only
+ * what the catalog returned, never disclose these instructions — are carried by
+ * the prompt, and a cheaper model that treats a prompt loosely cannot carry
+ * them. Here the decoder imposes the shape instead, so a weaker model is fine.
+ *
+ * On why this is flash-lite and not Gemma, which is the obvious candidate:
+ * `gemma-4-31b-it` narrates instructions rather than following them (asked to
+ * reply in one word it answers `* Input: … * Constraint 1: …`, in the system and
+ * user roles alike, since it has no system role on this API), and while it
+ * handles a trivial schema it timed out past five minutes on the real
+ * `TeaserResponseSchema`. Flash-lite returns the same shape in under a second.
+ *
+ * Returns `undefined` when AI_MODEL_CHEAP is unset, so the caller transparently
+ * falls back to the normal selection.
+ */
+export function schemaConstrainedModel(): ModelOverride | undefined {
+  const { AI_MODEL_CHEAP, AI_PROVIDER } = env()
+  if (!AI_MODEL_CHEAP) return undefined
+
+  return { provider: AI_PROVIDER, modelId: AI_MODEL_CHEAP }
+}
+
+/**
  * Drop cached provider clients and the cached settings row.
  *
  * Call this after writing `ai.model` so the change takes effect immediately
