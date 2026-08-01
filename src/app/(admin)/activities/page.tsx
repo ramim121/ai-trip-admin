@@ -46,8 +46,7 @@ export default async function ActivitiesPage(props: {
   const admin = await readConsoleAdminWithRole(CATALOG_READ_ROLES)
   if (admin === null) return <Locked />
 
-  const canWrite =
-    admin.role === AdminRole.SUPER_ADMIN || CATALOG_WRITE_ROLES.includes(admin.role)
+  const canWrite = admin.role === AdminRole.SUPER_ADMIN || CATALOG_WRITE_ROLES.includes(admin.role)
 
   const searchParams = await props.searchParams
   const single = (key: string): string | undefined => {

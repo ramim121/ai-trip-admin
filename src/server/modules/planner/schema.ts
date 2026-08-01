@@ -416,14 +416,12 @@ export const UpdateBlockBody = z
   .meta({ id: 'UpdateBlockBody' })
 export type UpdateBlockBody = z.infer<typeof UpdateBlockBody>
 
-export const BlockMutationResponse = z
-  .object({ itinerary: Itinerary, blockId: z.uuid() })
-  .meta({
-    id: 'BlockMutationResponse',
-    description:
-      'The whole itinerary comes back, conflicts included: one edit can create a clash on a day ' +
-      'the client was not looking at, and a partial response would hide it.',
-  })
+export const BlockMutationResponse = z.object({ itinerary: Itinerary, blockId: z.uuid() }).meta({
+  id: 'BlockMutationResponse',
+  description:
+    'The whole itinerary comes back, conflicts included: one edit can create a clash on a day ' +
+    'the client was not looking at, and a partial response would hide it.',
+})
 export type BlockMutationResponse = z.infer<typeof BlockMutationResponse>
 
 export const SaveItineraryResponse = z

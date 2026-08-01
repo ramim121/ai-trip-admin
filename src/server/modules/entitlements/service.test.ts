@@ -126,8 +126,8 @@ function world(options: WorldOptions = {}): void {
   mockDb.usageCounter.updateMany.mockResolvedValue({ count: 1 })
   mockDb.itinerary.updateMany.mockResolvedValue({ count: 1 })
   mockDb.itinerary.findFirst.mockResolvedValue({ status: 'DRAFT' })
-  mockDb.$transaction.mockImplementation(
-    async (fn: (tx: typeof mockDb) => Promise<unknown>) => fn(mockDb)
+  mockDb.$transaction.mockImplementation(async (fn: (tx: typeof mockDb) => Promise<unknown>) =>
+    fn(mockDb)
   )
   mockDb.subscription.findFirst.mockResolvedValue(options.subscription ?? null)
   mockDb.plan.findUnique.mockResolvedValue(
@@ -472,8 +472,7 @@ describe('claimSaveSlot', () => {
       itinerary: {
         findFirst: ({ where }: { where: { id: string } }) =>
           Promise.resolve(status.has(where.id) ? { status: status.get(where.id) } : null),
-        count: () =>
-          Promise.resolve([...status.values()].filter((s) => saved.includes(s)).length),
+        count: () => Promise.resolve([...status.values()].filter((s) => saved.includes(s)).length),
         updateMany: ({
           where,
           data,

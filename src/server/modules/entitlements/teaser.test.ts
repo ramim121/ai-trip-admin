@@ -91,8 +91,6 @@ describe('TEASER_DAILY_GENERATION_RULE', () => {
     // The two limits are not redundant. The per-address one caps a single
     // network; the ceiling is what caps the bill when a hundred of them show up
     // together, which no per-address limit can do.
-    expect(TEASER_DAILY_GENERATION_CEILING).toBeLessThan(
-      TEASER_REQUESTS_PER_IP_PER_HOUR * 24 * 100
-    )
+    expect(TEASER_DAILY_GENERATION_CEILING).toBeLessThan(TEASER_REQUESTS_PER_IP_PER_HOUR * 24 * 100)
   })
 })

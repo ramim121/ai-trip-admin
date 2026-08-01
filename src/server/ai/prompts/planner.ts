@@ -5,10 +5,17 @@ import { MAX_TRIP_DAYS } from '../schemas'
  * The trip designer's prompt.
  *
  * Versioning is by export name, never by edit. A released prompt is frozen:
- * PlannerMessage rows reference the version that produced them, and quietly
- * changing `plannerSystemPromptV1` would make every stored conversation a lie
- * about how it was generated. A change means a new `...V2` export and a
- * deliberate move of the `plannerSystemPrompt` alias at the bottom.
+ * quietly changing `plannerSystemPromptV1` would make every conversation it
+ * already produced unexplainable after the fact. A change means a new `...V2`
+ * export and a deliberate move of the `plannerSystemPrompt` alias at the bottom.
+ *
+ * CAVEAT, because this comment used to overstate it: nothing currently PERSISTS
+ * which version produced a given turn. `PlannerMessage` records the model but
+ * has no prompt-version column, so the freeze rule is enforced by discipline
+ * here, not by the data — a stored conversation can only be attributed to a
+ * prompt version by its timestamp. Closing that gap means a `promptVersion`
+ * column and `appendMessage` writing `PLANNER_PROMPT_VERSION` into it. Until
+ * then, treat this as a gap to close, not as a rule you may quietly break.
  *
  * One turn's prompt is TWO strings, and the split is a security boundary rather
  * than a formatting choice.
@@ -136,7 +143,9 @@ function situationalLine(context: PlannerPromptContext): string {
     // Omitted entirely rather than echoing free text: a sentence in the system
     // message is worth more to an attacker than any other sentence we write, so
     // an unconfirmed place name does not get to buy one.
-    context.destinationName ? `The traveller is planning a trip to ${context.destinationName}.` : null,
+    context.destinationName
+      ? `The traveller is planning a trip to ${context.destinationName}.`
+      : null,
     context.todayIso ? `Today's date at the destination is ${context.todayIso}.` : null,
   ]
     .filter(Boolean)

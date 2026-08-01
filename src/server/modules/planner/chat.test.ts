@@ -557,7 +557,16 @@ describe('the per-turn budget', () => {
 // ── FIX 3: the prompt is counted against the plan ───────────────────────────
 
 describe('counting the prompt', () => {
-  it('records one AI prompt against the account once the turn is persisted', async () => {
+  it('does NOT count the turn here — the route already claimed it', async () => {
+    // This used to increment after the stream finished, which is exactly what
+    // made the ceiling advisory: `canPrompt` read the counter, up to 45 seconds
+    // of streaming passed, and only then did the increment land. Every request
+    // arriving inside that window read the same pre-claim value and was
+    // allowed, so 500 concurrent turns all passed a 30-turn ceiling.
+    //
+    // The claim now happens in the route, before the model is called, as one
+    // predicate-bearing UPDATE. Counting again here would spend two of the
+    // traveller's allowance for a single reply.
     const response = await streamPlannerTurn({
       actor: USER,
       session: session(brief()),
@@ -565,10 +574,8 @@ describe('counting the prompt', () => {
     })
     await readFrames(response)
 
-    expect(recordUsage).toHaveBeenCalledTimes(1)
-    expect(recordUsage).toHaveBeenCalledWith(USER_ID, { aiPromptsUsed: 1 })
-    // After the message, not before: a turn the traveller never received must
-    // not come out of their monthly allowance.
+    expect(recordUsage).not.toHaveBeenCalled()
+    // The turn itself still completes and is persisted.
     expect(appendMessage).toHaveBeenCalled()
   })
 

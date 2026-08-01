@@ -197,7 +197,7 @@ export function catalogTools(context: CatalogToolContext) {
         'enjoys, and call it again with different interests or a different category when the ' +
         'first shortlist does not fit — a second search is far cheaper than a wrong suggestion. ' +
         'Results are ranked by how well their tags overlap the interests you pass, so pass the ' +
-        "traveller's own words: \"street food\", \"temples\", \"nothing strenuous\". " +
+        'traveller\'s own words: "street food", "temples", "nothing strenuous". ' +
         'If it returns nothing, say so plainly and either offer what the catalog does have or ' +
         'ask a question that would let you search differently. Never fill the gap from your own ' +
         'knowledge of the place.',
@@ -439,7 +439,8 @@ export function catalogTools(context: CatalogToolContext) {
               ok: true,
               found: false,
               activityId,
-              error: 'That activity id is not in the catalog. Use ids returned by searchActivities.',
+              error:
+                'That activity id is not in the catalog. Use ids returned by searchActivities.',
             }
           }
 

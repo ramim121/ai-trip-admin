@@ -449,7 +449,9 @@ export async function streamPlannerTurn(input: PlannerTurnInput): Promise<Respon
           ...fields,
         })
 
-        await countPromptAgainstPlan(input.actor)
+        // The turn was already counted, atomically, by `claimPrompt` in the
+        // route before the model was called. Counting it again here would spend
+        // two of the traveller's allowance for one reply.
 
         const learned = Object.keys(briefPatch).length > 0
         const brief = learned

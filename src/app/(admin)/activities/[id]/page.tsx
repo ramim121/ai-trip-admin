@@ -40,8 +40,7 @@ export default async function EditActivityPage(props: {
   const admin = await readConsoleAdminWithRole(CATALOG_READ_ROLES)
   if (admin === null) return <Locked />
 
-  const canWrite =
-    admin.role === AdminRole.SUPER_ADMIN || CATALOG_WRITE_ROLES.includes(admin.role)
+  const canWrite = admin.role === AdminRole.SUPER_ADMIN || CATALOG_WRITE_ROLES.includes(admin.role)
 
   const { id } = await props.params
   const searchParams = await props.searchParams

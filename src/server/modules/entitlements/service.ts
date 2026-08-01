@@ -350,8 +350,18 @@ function calendarMonth(now: Date): { start: Date; end: Date } {
   }
 }
 
-/** Month arithmetic that clamps rather than overflowing: 31 Mar − 1 month is 28 Feb. */
-function addMonths(date: Date, months: number): Date {
+/**
+ * Month arithmetic that clamps rather than overflowing: 31 Mar − 1 month is 28 Feb.
+ *
+ * Exported because a settlement has to compute a subscription's
+ * `currentPeriodEnd` as "now plus one month", while `resolvePeriod` below
+ * derives that same subscriber's metering window by stepping the boundary BACK
+ * a month. Two implementations would agree for twenty-eight days a month and
+ * disagree on the rest — a payment taken on the 31st would open a billing period
+ * whose meter resets on a different day from the one the subscription claims.
+ * One function, used from both ends.
+ */
+export function addMonths(date: Date, months: number): Date {
   const dayOfMonth = date.getUTCDate()
   const shifted = new Date(date.getTime())
 
@@ -678,11 +688,7 @@ export async function canSaveItinerary(
  * what actually enforces. One copy of the thresholds and one copy of every
  * message, so the wall a client is shown in advance is the wall it hits.
  */
-function decideSave(
-  entitlement: Entitlement,
-  savedCount: number,
-  alreadySaved: boolean
-): Decision {
+function decideSave(entitlement: Entitlement, savedCount: number, alreadySaved: boolean): Decision {
   const { maxSavedItineraries, itinerariesPerPeriod, periodUsage } = entitlement
 
   const remainingSaves =
@@ -709,16 +715,39 @@ function decideSave(
     return refuse(periodItineraryRefusal(entitlement, itinerariesPerPeriod))
   }
 
-  // Whichever ceiling binds first is what the traveller actually has left. Both
-  // null is a plan with no ceiling at all.
-  const remaining =
-    remainingSaves === null
-      ? remainingPeriod
-      : remainingPeriod === null
-        ? remainingSaves
-        : Math.min(remainingSaves, remainingPeriod)
+  return allow(remainingSaveAllowance(entitlement, savedCount))
+}
 
-  return allow(remaining)
+/**
+ * What is left of the two save ceilings at a given saved count.
+ *
+ * Whichever binds first is what the traveller actually has left; both null is a
+ * plan with no ceiling at all.
+ *
+ * Split out of `decideSave` because `claimSaveSlot` needs this same arithmetic
+ * one save LATER than the decision it took. The decision is computed from the
+ * count before the claim — it has to be, that is what decides whether the claim
+ * is allowed — but `remaining` is published as the allowance *afterwards*, in
+ * `SaveResult`, in `SaveItineraryResponse.remaining` and in the OpenAPI
+ * description of POST /api/v1/itineraries/{id}/save. Re-deriving it here rather
+ * than subtracting one at the call site is what keeps the null-means-unlimited
+ * handling in a single place, and stops a save being wrongly debited from
+ * `itinerariesPerPeriod` — saving does not touch `itinerariesCreated`, which is
+ * claimed by `claimItineraryCreation` at generation time.
+ */
+function remainingSaveAllowance(entitlement: Entitlement, savedCount: number): number | null {
+  const { maxSavedItineraries, itinerariesPerPeriod, periodUsage } = entitlement
+
+  const remainingSaves =
+    maxSavedItineraries === null ? null : Math.max(0, maxSavedItineraries - savedCount)
+  const remainingPeriod =
+    itinerariesPerPeriod === null
+      ? null
+      : Math.max(0, itinerariesPerPeriod - periodUsage.itinerariesCreated)
+
+  if (remainingSaves === null) return remainingPeriod
+  if (remainingPeriod === null) return remainingSaves
+  return Math.min(remainingSaves, remainingPeriod)
 }
 
 /**
@@ -800,7 +829,10 @@ export async function claimSaveSlot(
           // nothing left to claim, and refusing here would leave an account at
           // its cap unable to touch the trips it already has.
           if (current.status !== ItineraryStatus.DRAFT) {
-            return { decision: decideSave(entitlement, entitlement.savedCount, true), claimed: false }
+            return {
+              decision: decideSave(entitlement, entitlement.savedCount, true),
+              claimed: false,
+            }
           }
 
           const savedCount = await tx.itinerary.count({
@@ -815,10 +847,25 @@ export async function claimSaveSlot(
             data: { status: ItineraryStatus.SAVED },
           })
 
+          // The slot this transaction just took has to come off the allowance
+          // it reports. `decision` was computed from the count BEFORE the claim
+          // — necessarily, since that is what decided the claim was permitted —
+          // but every published description of this field says it is what
+          // remains AFTERWARDS. Left as it was, a FREE account that had just
+          // taken its third and final slot was told it had one left, so a client
+          // rendering "1 save remaining" offered a button whose only possible
+          // outcome was a 403.
+          if (claimed.count === 1) {
+            return {
+              decision: allow(remainingSaveAllowance(entitlement, savedCount + 1)),
+              claimed: true,
+            }
+          }
+
           // Zero rows cannot happen under Serializable — the status read above
           // would have conflicted first — but if it ever does, the itinerary is
           // out of DRAFT and the caller has the outcome they asked for.
-          return { decision, claimed: claimed.count === 1 }
+          return { decision, claimed: false }
         },
         { isolationLevel: 'Serializable' }
       )
@@ -1018,6 +1065,12 @@ export async function recordUsage(
 const ITINERARY_USAGE: Required<UsageDelta> = { itinerariesCreated: 1, aiPromptsUsed: 1 }
 
 /**
+ * One conversational turn. Spends an AI prompt and nothing else — a turn is not
+ * an itinerary, so it must not consume the generation allowance too.
+ */
+const PROMPT_USAGE: Required<UsageDelta> = { itinerariesCreated: 0, aiPromptsUsed: 1 }
+
+/**
  * Claim one itinerary from the per-period allowance. The binding decision.
  *
  * This is the gate the generation path did not have. `canGenerateDays` only
@@ -1132,6 +1185,74 @@ async function exhaustedPeriodRefusal(
   // Whatever the counter says, the itinerary ceiling is the one this path is
   // about, so it is also the fallback when the row has vanished underneath us.
   return periodItineraryRefusal(entitlement, itinerariesPerPeriod ?? 0)
+}
+
+/**
+ * Claim one planner turn against the period's AI allowance.
+ *
+ * The counterpart to `claimItineraryCreation`, and it exists for the same
+ * reason. `canPrompt` only READS the counter and compares in JavaScript, and the
+ * matching increment used to run after the stream finished — a window up to the
+ * 45-second wall-clock timeout wide. Five hundred concurrent requests all read
+ * the same pre-claim value, all pass, and all bill a real model call against an
+ * allowance sold as thirty. Claiming before the work closes that window: the
+ * ceiling lives in the WHERE clause, so Postgres re-evaluates it per row under a
+ * lock and exactly one of two racing requests at the boundary wins.
+ *
+ * `canPrompt` remains the advisory read for GET /me/entitlements, where a
+ * snapshot is genuinely what is wanted. This is the one that binds.
+ */
+export async function claimPrompt(userId: string, now: Date = new Date()): Promise<Decision> {
+  const entitlement = await resolveEntitlement(userId, now)
+  const { aiPromptsPerPeriod } = entitlement
+
+  // Nothing to enforce, so meter it and let it through. An unconditional
+  // increment is correct precisely because no ceiling is being defended.
+  if (aiPromptsPerPeriod === null) {
+    await recordUsage(userId, PROMPT_USAGE, now)
+    return allow(null)
+  }
+
+  const period = await currentPeriod(userId, now)
+
+  // Seed the row so the predicate below has something to bite on; without it an
+  // account's first turn of the period matches nothing and is refused for
+  // spending an allowance it has not touched.
+  await db.usageCounter.upsert({
+    where: { userId_periodStart: { userId, periodStart: period.start } },
+    create: { userId, periodStart: period.start, periodEnd: period.end },
+    update: { periodEnd: period.end },
+    select: { id: true },
+  })
+
+  const claimed = await db.usageCounter.updateMany({
+    where: { userId, periodStart: period.start, aiPromptsUsed: { lt: aiPromptsPerPeriod } },
+    data: { aiPromptsUsed: { increment: PROMPT_USAGE.aiPromptsUsed } },
+  })
+
+  if (claimed.count === 0) return refuse(periodPromptRefusal(entitlement, aiPromptsPerPeriod))
+
+  // A report, not an enforcement — the snapshot predates the claim, so under
+  // concurrency it may read one generous. The predicate above is what binds.
+  return allow(Math.max(0, aiPromptsPerPeriod - entitlement.periodUsage.aiPromptsUsed - 1))
+}
+
+/**
+ * Hand a claimed turn back when the turn never happened.
+ *
+ * The allowance is claimed before the model is called, because claiming it
+ * afterwards is the race this module exists to prevent. The cost of that
+ * ordering is that a provider outage would otherwise bill a traveller for a
+ * reply they never received. Guarded on `gt: 0` so a double release can never
+ * push the counter negative.
+ */
+export async function releasePrompt(userId: string, now: Date = new Date()): Promise<void> {
+  const period = await currentPeriod(userId, now)
+
+  await db.usageCounter.updateMany({
+    where: { userId, periodStart: period.start, aiPromptsUsed: { gt: 0 } },
+    data: { aiPromptsUsed: { decrement: PROMPT_USAGE.aiPromptsUsed } },
+  })
 }
 
 /**

@@ -8,6 +8,21 @@ import { z } from 'zod'
  * evaluates route modules during the build. The first actual access validates.
  */
 
+/**
+ * A boolean written by a human into a `.env` file.
+ *
+ * `z.coerce.boolean()` is the trap this avoids: it is `Boolean(value)`, under
+ * which the string `"false"` is `true`. For a flag whose entire job is to keep a
+ * fake payment gateway switched off, "the operator typed false and got true" is
+ * not a rounding error.
+ *
+ * `z.stringbool()` accepts the spellings people actually use — true/false, 1/0,
+ * yes/no, on/off, enabled/disabled, case-insensitively — and REJECTS anything
+ * else rather than guessing. A typo therefore fails the boot loudly instead of
+ * resolving to whichever value the typo happened to be falsy under.
+ */
+const EnvBoolean = z.stringbool()
+
 const EnvSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -51,11 +66,62 @@ const EnvSchema = z
     // meter on is one the caller typed. Raise it only to the number of hops
     // that genuinely append.
     TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).max(10).default(0),
+
+    // ── The sandbox payment gateway ──────────────────────────────────────────
+    //
+    // Two flags rather than one, and they are not redundant. A mock gateway
+    // that settles on a button press grants real entitlements: an
+    // ItineraryUnlock row, a Subscription row, the full-length trip somebody
+    // would otherwise have paid 200 BDT for. Reaching production switched on,
+    // it is not a bug in a test tool — it is the paywall, removed, by anyone
+    // who can read a URL.
+    //
+    // One flag is one accident away from that. Environment variables get
+    // copied between deployments wholesale, a `.env` gets pasted into a
+    // dashboard, a staging config becomes the template for production. The
+    // second flag exists so that the accident has to happen twice, to two
+    // differently-named variables, one of which says the word PRODUCTION out
+    // loud.
+    //
+    // Neither is read at the route layer. `assertMockPaymentsPermitted()` in
+    // server/payments/mock.ts is the single place both are evaluated, so there
+    // is no second copy of the rule for anyone to get subtly wrong.
+
+    /**
+     * Whether the sandbox gateway may be used at all.
+     *
+     * Absent means TRUE in development and FALSE everywhere else — including
+     * `test`, which is deliberate: the suite proves refusals, and a runner that
+     * silently enabled the thing being refused would prove nothing. Tests that
+     * exercise the happy path set it explicitly.
+     */
+    PAYMENTS_MOCK_ENABLED: EnvBoolean.optional(),
+
+    /**
+     * The second key to the same door, and the only thing that lets the sandbox
+     * run under NODE_ENV=production.
+     *
+     * Defaults false and has no environment-dependent behaviour, so there is
+     * exactly one way to reach a mock settlement in production: type this
+     * variable's name, in full, on purpose.
+     */
+    PAYMENTS_ALLOW_MOCK_IN_PRODUCTION: EnvBoolean.default(false),
   })
   .refine((e) => e.AUTH_USER_SECRET !== e.AUTH_ADMIN_SECRET, {
     message: 'AUTH_USER_SECRET and AUTH_ADMIN_SECRET must be different values',
     path: ['AUTH_ADMIN_SECRET'],
   })
+  /*
+   * Resolved after validation because the default is a function of another
+   * field, which a per-field `.default()` cannot express. Written as a
+   * transform rather than left for `env()`'s callers to work out: a default
+   * computed at each call site is a default that eventually differs between
+   * call sites, and this one decides whether a paywall exists.
+   */
+  .transform((e) => ({
+    ...e,
+    PAYMENTS_MOCK_ENABLED: e.PAYMENTS_MOCK_ENABLED ?? e.NODE_ENV === 'development',
+  }))
 
 export type Env = z.infer<typeof EnvSchema>
 

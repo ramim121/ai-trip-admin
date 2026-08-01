@@ -25,6 +25,15 @@ import {
   TeaserRequest,
 } from '@/server/modules/entitlements/schema'
 import {
+  CheckoutBody,
+  CheckoutResponse,
+  MockCompletionBody,
+  PaymentCompletionResponse,
+  PaymentDetail,
+  PaymentListQuery,
+  PaymentListResponse,
+} from '@/server/payments/schema'
+import {
   BlockMutationResponse,
   CreateBlockBody,
   CreatePlannerSessionBody,
@@ -495,7 +504,7 @@ registerRoute({
     'implementation on purpose: if browsing and planning ranked differently, a traveller would ' +
     'be shown one order on the website and another in their itinerary, and neither of us could ' +
     'say which was right.\n\n' +
-    'Pass `interests` in the traveller\'s own words. Ranking is by how many of them a row\'s tags ' +
+    "Pass `interests` in the traveller's own words. Ranking is by how many of them a row's tags " +
     'answer, then by curated order; `matchedInterests` on each result says which ones hit, so a ' +
     'UI can explain the ordering rather than assert it.\n\n' +
     'A budget passed as `maxPricePerPersonBdt` does NOT drop activities with no listed price. ' +
@@ -528,7 +537,7 @@ registerRoute({
   description:
     'Everything a detail page needs in one response: the long description, every image with its ' +
     'alt text, the interest tags, and the opening hours.\n\n' +
-    'Opening hours are minutes from local midnight in the destination\'s timezone, with ' +
+    "Opening hours are minutes from local midnight in the destination's timezone, with " +
     '`dayOfWeek` 0 = Sunday. A `closesMinute` above 1440 runs past midnight — 1560 is 02:00 the ' +
     'next morning. An EMPTY `openingHours` array means ALWAYS AVAILABLE, not closed: it is how a ' +
     'public beach or a viewpoint is recorded. Once any window exists, a weekday with none is ' +
@@ -594,7 +603,9 @@ registerRoute({
     201: { schema: PlannerSession, description: 'A new conversation.' },
     200: { schema: PlannerSession, description: 'The conversation already in progress.' },
     400: errorResponse(MALFORMED_BODY),
-    401: errorResponse('The bearer token is missing, malformed, expired or for the other audience.'),
+    401: errorResponse(
+      'The bearer token is missing, malformed, expired or for the other audience.'
+    ),
     500: errorResponse(UNEXPECTED),
   },
 })
@@ -606,7 +617,7 @@ registerRoute({
   summary: 'One conversation, with its history',
   description:
     'The full message history plus the brief accumulated so far. Ownership is part of the query ' +
-    'rather than a check performed after it, so there is no path that reads another traveller\'s ' +
+    "rather than a check performed after it, so there is no path that reads another traveller's " +
     'session at all.\n\n' +
     'Token counts are per message, not per session, because the configured model can change ' +
     'mid-conversation and cost attribution has to survive that.',
@@ -719,11 +730,11 @@ registerRoute({
   method: 'get',
   path: '/api/v1/itineraries',
   operationId: 'listItineraries',
-  summary: 'The traveller\'s own trips',
+  summary: "The traveller's own trips",
   description:
     'Summaries only. A list returning every day and every block would ship hundreds of ' +
     'kilobytes to render a dozen cards, and would make the practical page size a function of ' +
-    'how detailed somebody\'s trips happen to be.\n\n' +
+    "how detailed somebody's trips happen to be.\n\n" +
     'There is no parameter for whose trips to list. The user id comes from the token and goes ' +
     'straight into the WHERE clause, so there is nothing here to tamper with.\n\n' +
     '`total` counts everything matching the filter, ignoring `limit` and `offset`.',
@@ -731,7 +742,7 @@ registerRoute({
   security: 'user',
   querySchema: ItineraryListQuery,
   responses: {
-    200: { schema: ItineraryListResponse, description: 'This traveller\'s itineraries.' },
+    200: { schema: ItineraryListResponse, description: "This traveller's itineraries." },
     400: errorResponse(MALFORMED_QUERY),
     401: errorResponse('Authentication is required.'),
     500: errorResponse(UNEXPECTED),
@@ -745,7 +756,7 @@ registerRoute({
   summary: 'One trip, in full, with its conflicts',
   description:
     'Every day, every block, and every conflict we can see. Times are minutes from local ' +
-    'midnight in the destination\'s timezone: `startMinute` 540 is 09:00, and an `endMinute` ' +
+    "midnight in the destination's timezone: `startMinute` 540 is 09:00, and an `endMinute` " +
     'above 1440 runs past midnight.\n\n' +
     'A block with `isEstimate: true` is a transfer WE computed from straight-line distance — ' +
     'ours to redraw whenever the day changes. A block a person authored never carries the flag ' +
@@ -766,7 +777,7 @@ registerRoute({
   method: 'patch',
   path: '/api/v1/itineraries/{id}',
   operationId: 'updateItinerary',
-  summary: 'Edit the trip\'s own fields',
+  summary: "Edit the trip's own fields",
   description:
     'Two fields ripple further than they look, which is why the whole itinerary comes back ' +
     'rather than an acknowledgement.\n\n' +
@@ -831,7 +842,7 @@ registerRoute({
     'the day is planned AROUND them, never over them. And activities already used on the other ' +
     'days are excluded, so day 3 does not quietly become day 1 again.\n\n' +
     'A day beyond the entitlement is refused with the structured reason rather than generated. ' +
-    'Day 5 of a free traveller\'s trip is precisely the wall the one-off unlock exists to lift.\n\n' +
+    "Day 5 of a free traveller's trip is precisely the wall the one-off unlock exists to lift.\n\n" +
     'Regeneration is deterministic and catalog-only: it places rows the catalog ranked, in the ' +
     'order it ranked them. It is not a model call, so it costs no AI budget.',
   tags: ITINERARIES,
@@ -858,7 +869,7 @@ registerRoute({
     '`dayNumber` moves the block to another day of the same trip; omitting it leaves it where it ' +
     'is. Both the day it left and the day it arrived on have their estimated transfers redrawn.\n\n' +
     'Nothing else on the timeline moves. If the new position clashes, the clash is reported in ' +
-    '`conflicts` and the block stays exactly where it was put — shuffling somebody\'s afternoon ' +
+    "`conflicts` and the block stays exactly where it was put — shuffling somebody's afternoon " +
     'to make our arithmetic work would produce a day nobody asked for.\n\n' +
     'Editing a block we generated makes it theirs: `isEstimate` is cleared, so a later resync can ' +
     'never delete the change.',
@@ -907,7 +918,7 @@ registerRoute({
   summary: 'Keep this trip',
   description:
     'A DRAFT is work in progress and occupies no allowance; saving is what claims one of the ' +
-    'free tier\'s three slots. That is why the check lives here rather than at creation — a ' +
+    "free tier's three slots. That is why the check lives here rather than at creation — a " +
     'traveller who tries four ideas and keeps three has not exceeded anything.\n\n' +
     'Re-saving an itinerary that is already kept succeeds and changes nothing. It is not a ' +
     'fourth of three, and refusing it would leave an account at its cap unable to touch the ' +
@@ -920,6 +931,178 @@ registerRoute({
     401: errorResponse('Authentication is required.'),
     403: errorResponse(ENTITLEMENT_REFUSAL),
     404: errorResponse(NOT_MY_ITINERARY),
+    500: errorResponse(UNEXPECTED),
+  },
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Payments
+//
+// Two things about this group are worth reading before the operations.
+//
+// THE CLIENT NEVER NAMES A PRICE. `CheckoutBody` has no amount field, and an
+// amount sent anyway is dropped by the schema before a handler sees it. The
+// server reads the figure from the Plan row or the unlock-price setting on
+// every call, and `CheckoutResponse.amountBdt` reports what will actually be
+// charged. A client that wants to show a price should render that number, not
+// one it sent.
+//
+// THE SANDBOX IS REAL BUT NOT MONEY. `provider: "MOCK"` and `isTest: true` mark
+// payments taken by the simulated gateway. They settle on a button press and
+// grant genuine entitlements — an ItineraryUnlock, a Subscription — so any
+// client rendering a payment page MUST say so unmissably when `isTest` is true.
+// The gateway refuses to run under NODE_ENV=production unless two separate
+// environment flags both permit it, so these operations answer 403 there by
+// default.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const PAYMENTS = ['Payments'] as const
+
+const NOT_MY_PAYMENT =
+  'No such payment, or it belongs to another traveller. The two are deliberately ' +
+  'indistinguishable, for the same reason an itinerary is.'
+
+registerRoute({
+  method: 'post',
+  path: '/api/v1/payments/checkout',
+  operationId: 'openCheckout',
+  summary: 'Start a purchase',
+  description:
+    'Creates a payment and returns somewhere to pay it. The body says WHAT is being bought; it ' +
+    'cannot say what that costs. There is no amount field, one sent anyway is stripped before ' +
+    'validation, and the price is read server-side from the Plan row or the unlock-price ' +
+    'setting — `amountBdt` in the response is what will be charged.\n\n' +
+    'The two purposes are not interchangeable. `ITINERARY_UNLOCK` takes an `itineraryId` you own ' +
+    'and buys the full length of that one trip, permanently. `SUBSCRIPTION` takes a `planCode` ' +
+    'naming a plan that is on sale AND billed monthly.\n\n' +
+    'UNLOCK_SINGLE is refused here with a 400. It is a price, not a tier: granting it as a ' +
+    'subscription would turn one 200 BDT payment into an account-wide upgrade, so a checkout for ' +
+    'any plan whose interval is NONE is rejected rather than quietly downgraded.\n\n' +
+    '`redirectUrl` is absolute and points at the public website, not at this API. Send the ' +
+    'browser there, then poll GET /api/v1/payments/{id}.',
+  tags: PAYMENTS,
+  security: 'user',
+  requestSchema: CheckoutBody,
+  responses: {
+    201: {
+      schema: CheckoutResponse,
+      description: 'The payment was created. Nothing has been charged or granted yet.',
+    },
+    400: errorResponse(
+      `${MALFORMED_BODY} Also returned when \`itineraryId\` is missing for an unlock, when ` +
+        '`planCode` is missing for a subscription, or when the named plan is a one-off price ' +
+        'rather than a monthly tier.'
+    ),
+    401: errorResponse('Authentication is required.'),
+    403: errorResponse(
+      'The configured gateway refuses to open a checkout here. For the sandbox provider that ' +
+        'means PAYMENTS_MOCK_ENABLED is off, or NODE_ENV is production without ' +
+        'PAYMENTS_ALLOW_MOCK_IN_PRODUCTION also set. The message names both flags.'
+    ),
+    404: errorResponse(
+      'The itinerary was not found or belongs to another traveller, or no such plan is on sale. ' +
+        'A retired plan answers the same as a code that was never issued.'
+    ),
+    409: errorResponse('That itinerary is already unlocked in full — there is nothing to buy.'),
+    429: errorResponse('Too many checkouts started by this account in the last hour.'),
+    500: errorResponse(UNEXPECTED),
+  },
+})
+
+registerRoute({
+  method: 'post',
+  path: '/api/v1/payments/mock/{paymentId}/complete',
+  operationId: 'completeMockPayment',
+  summary: 'Settle a sandbox payment',
+  description:
+    "The simulated gateway's Pay / Decline / Cancel button. Stands in for the callback a real " +
+    'provider would send, and exists so the purchase flow can be exercised end to end without a ' +
+    'merchant account.\n\n' +
+    'SAFE TO CALL TWICE, and clients should assume they will. The settlement is a conditional ' +
+    "update predicated on the payment's current status, so a second completion grants nothing " +
+    'and returns exactly the body the first one did — `grant` included, because it is read back ' +
+    'from the entitlement rather than reported by the settlement. A double-clicked Pay button ' +
+    'buys one unlock.\n\n' +
+    'On SUCCESS the entitlement is granted in the SAME transaction that marks the payment ' +
+    'SUCCEEDED: an ItineraryUnlock for that trip, or a Subscription running one month from now. ' +
+    'FAILURE and CANCEL both end in a FAILED payment and grant nothing; they are distinguished ' +
+    'because a decline and an abandonment are different facts about a funnel.\n\n' +
+    "Reaches only payments this traveller owns AND that the sandbox created. A real gateway's " +
+    'payment is not settleable here at any price.',
+  tags: PAYMENTS,
+  security: 'user',
+  requestSchema: MockCompletionBody,
+  responses: {
+    200: {
+      schema: PaymentCompletionResponse,
+      description:
+        'The payment in its final state, and what it granted. Identical on a repeated call.',
+    },
+    400: errorResponse(MALFORMED_BODY),
+    401: errorResponse('Authentication is required.'),
+    403: errorResponse(
+      'The sandbox gateway is not permitted here. PAYMENTS_MOCK_ENABLED is off, or NODE_ENV is ' +
+        'production without PAYMENTS_ALLOW_MOCK_IN_PRODUCTION also set — it grants real ' +
+        'entitlements without taking real money, so it takes two independent flags to run there. ' +
+        'The message names both.'
+    ),
+    404: errorResponse(
+      `${NOT_MY_PAYMENT} Also returned when the payment was created by a real gateway rather ` +
+        'than the sandbox, which this route may not settle.'
+    ),
+    409: errorResponse(
+      'The payment can no longer be settled — its account was deleted, or the plan behind it is ' +
+        'not a subscription tier.'
+    ),
+    500: errorResponse(UNEXPECTED),
+  },
+})
+
+registerRoute({
+  method: 'get',
+  path: '/api/v1/payments/{id}',
+  operationId: 'getPayment',
+  summary: 'One payment, for polling',
+  description:
+    'Where a payment has got to. The client sent the traveller off to a gateway and has no other ' +
+    'way to learn the outcome — the settlement arrives as a callback on the server, not as a ' +
+    'reply to anything the browser is holding open.\n\n' +
+    'While a payment is still in flight its status is confirmed with the provider before being ' +
+    'reported, rather than read from our row alone: callbacks get lost, and "pending" shown for a ' +
+    'payment that cleared ten minutes ago is how a support queue fills up. A terminal status is ' +
+    'reported as it stands.\n\n' +
+    '`rawPayload` and `idempotencyKey` are never published. The first is a verbatim gateway body ' +
+    'and the second is what stops a replayed callback granting twice.',
+  tags: PAYMENTS,
+  security: 'user',
+  responses: {
+    200: { schema: PaymentDetail, description: 'The payment.' },
+    401: errorResponse('Authentication is required.'),
+    404: errorResponse(NOT_MY_PAYMENT),
+    500: errorResponse(UNEXPECTED),
+  },
+})
+
+registerRoute({
+  method: 'get',
+  path: '/api/v1/me/payments',
+  operationId: 'listMyPayments',
+  summary: "The traveller's own payments",
+  description:
+    'Payment history, newest first. There is no parameter for whose payments to list: the user ' +
+    'id comes from the token and goes straight into the query.\n\n' +
+    'Sandbox payments ARE included, flagged by `isTest`. They granted real entitlements, so ' +
+    'hiding them would leave somebody looking at an unlocked trip with nothing in their history ' +
+    'to explain it. Test rows are filtered in the admin console and in revenue reporting, where ' +
+    'the question is about money rather than about what somebody owns.\n\n' +
+    '`total` counts everything matching, ignoring `limit` and `offset`.',
+  tags: PAYMENTS,
+  security: 'user',
+  querySchema: PaymentListQuery,
+  responses: {
+    200: { schema: PaymentListResponse, description: "This traveller's payments." },
+    400: errorResponse(MALFORMED_QUERY),
+    401: errorResponse('Authentication is required.'),
     500: errorResponse(UNEXPECTED),
   },
 })

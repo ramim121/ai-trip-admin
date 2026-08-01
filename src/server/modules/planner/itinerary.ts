@@ -581,10 +581,7 @@ function packDay(
 }
 
 interface GenerateDayInput {
-  itinerary: Pick<
-    ItineraryRow,
-    'destinationId' | 'partySize' | 'pace' | 'transportPreference'
-  >
+  itinerary: Pick<ItineraryRow, 'destinationId' | 'partySize' | 'pace' | 'transportPreference'>
   dayId: string
   /** Ids already used elsewhere in the trip, so day 3 is not day 1 again. */
   excludeActivityIds: readonly string[]

@@ -257,14 +257,29 @@ const SETTINGS: SettingSeed[] = [
     key: 'ai.provider',
     value: 'google',
     description:
-      'Overrides the AI_PROVIDER environment variable at runtime so the model can be switched from the console during an incident. Falls back to the environment when unset.',
+      'Informational only. The provider actually in force is the `provider` field of the `ai.model` row, because resolveModelSelection() reads ONE row and takes both fields from it. Editing this row alone changes nothing — edit `ai.model`.',
     isPublic: false,
   },
   {
+    /*
+     * An OBJECT, not a bare model id.
+     *
+     * `readModelSetting()` in server/ai/provider.ts parses this value with
+     * `z.object({ provider?, model? })`. A bare string fails that parse, and the
+     * failure path is one `console.warn` followed by a silent fall back to the
+     * environment — so a row seeded as `'gemini-2.5-flash'` was not an override
+     * that happened to agree with AI_MODEL, it was an override that never
+     * applied at all. The single documented way to move off a model without a
+     * deploy did nothing, and it did it quietly, which is the worst way for a
+     * lever to be broken: from the console it looks set.
+     *
+     * Both fields live in this one row rather than in two, because that is what
+     * the reader supports; see the `ai.provider` note above.
+     */
     key: 'ai.model',
-    value: 'gemini-2.5-flash',
+    value: { provider: 'google', model: 'gemini-2.5-flash' },
     description:
-      'Model id used for planner generation. Overrides AI_MODEL. Recorded per message on PlannerMessage.',
+      'Provider and model used for planner generation, overriding AI_PROVIDER and AI_MODEL. MUST be an object — {"provider":"google","model":"gemini-2.5-flash"}. A bare string is rejected and the environment is silently used instead. Recorded per message on PlannerMessage.',
     isPublic: false,
   },
   {

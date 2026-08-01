@@ -328,7 +328,9 @@ export function detectOpeningHoursIssues(
       availability.reason === 'CLOSED_ON_DAY'
         ? 'closed that day'
         : `open ${availability.windowsOnDay
-            .map((window) => `${formatMinute(window.opensMinute)}–${formatMinute(window.closesMinute)}`)
+            .map(
+              (window) => `${formatMinute(window.opensMinute)}–${formatMinute(window.closesMinute)}`
+            )
             .join(', ')} that day`
 
     conflicts.push({

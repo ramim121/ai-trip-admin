@@ -314,10 +314,9 @@ describe('greatCircleKm', () => {
 
   it('gives a quarter of the circumference for a 90 degree separation', () => {
     const quarter = (Math.PI / 2) * EARTH_RADIUS_KM
-    expect(greatCircleKm({ latitude: 0, longitude: 0 }, { latitude: 0, longitude: 90 })).toBeCloseTo(
-      quarter,
-      6
-    )
+    expect(
+      greatCircleKm({ latitude: 0, longitude: 0 }, { latitude: 0, longitude: 90 })
+    ).toBeCloseTo(quarter, 6)
   })
 
   it('does not return NaN for antipodal points', () => {

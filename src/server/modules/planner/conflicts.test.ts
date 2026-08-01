@@ -386,7 +386,13 @@ describe('planTransitInsertions', () => {
     const insertions = planTransitInsertions(
       [
         block({ id: 'a', startMinute: 540, endMinute: 660, location: BEACH, title: 'Beach walk' }),
-        block({ id: 'b', startMinute: 780, endMinute: 900, location: ACROSS_TOWN, title: 'Temple' }),
+        block({
+          id: 'b',
+          startMinute: 780,
+          endMinute: 900,
+          location: ACROSS_TOWN,
+          title: 'Temple',
+        }),
       ],
       'PRIVATE_CAR'
     )

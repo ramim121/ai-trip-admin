@@ -254,10 +254,12 @@ describe('createItineraryFromBrief — day-limit enforcement', () => {
       },
     })
 
-    await expect(createItineraryFromBrief({ userId: USER_ID, brief: BRIEF })).rejects.toMatchObject({
-      status: 403,
-      reason: 'PERIOD_LIMIT',
-    })
+    await expect(createItineraryFromBrief({ userId: USER_ID, brief: BRIEF })).rejects.toMatchObject(
+      {
+        status: 403,
+        reason: 'PERIOD_LIMIT',
+      }
+    )
     expect(itineraryCreate).not.toHaveBeenCalled()
   })
 
@@ -283,9 +285,11 @@ describe('createItineraryFromBrief — day-limit enforcement', () => {
       refusal: { reason: 'FREE_DAY_LIMIT', message: 'No days.', upgrade: null },
     })
 
-    await expect(createItineraryFromBrief({ userId: USER_ID, brief: BRIEF })).rejects.toMatchObject({
-      status: 403,
-    })
+    await expect(createItineraryFromBrief({ userId: USER_ID, brief: BRIEF })).rejects.toMatchObject(
+      {
+        status: 403,
+      }
+    )
     expect(claimItineraryCreation).not.toHaveBeenCalled()
   })
 
@@ -320,10 +324,12 @@ describe('createItineraryFromBrief — day-limit enforcement', () => {
       refusal: { reason: 'PERIOD_LIMIT', message: 'Allowance spent.', upgrade: null },
     })
 
-    await expect(createItineraryFromBrief({ userId: USER_ID, brief: BRIEF })).rejects.toMatchObject({
-      status: 403,
-      code: 'FORBIDDEN',
-    })
+    await expect(createItineraryFromBrief({ userId: USER_ID, brief: BRIEF })).rejects.toMatchObject(
+      {
+        status: 403,
+        code: 'FORBIDDEN',
+      }
+    )
     expect(itineraryCreate).not.toHaveBeenCalled()
   })
 

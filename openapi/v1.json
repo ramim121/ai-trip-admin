@@ -38,6 +38,10 @@
       "description": "A traveller's own trips and their timelines. Server-authoritative: the client says what it wants and the server decides what happens, down to recomputing every price from the catalog. Conflicts are reported, never resolved by moving somebody's day."
     },
     {
+      "name": "Payments",
+      "description": "Buying an unlock or a subscription. The client names what it wants and never what it costs — the price is read server-side on every call. Payments marked `isTest` were taken by the sandbox gateway: no money moved, the entitlement is real, and any page rendering one must say so."
+    },
+    {
       "name": "Catalog",
       "description": "Destinations and the curated activities we actually sell. Public and unauthenticated: this is what the website browses, and the only inventory the AI planner may recommend. Unpublished rows are never listed, never counted and never addressable."
     }
@@ -2104,6 +2108,366 @@
           }
         }
       }
+    },
+    "/api/v1/payments/checkout": {
+      "post": {
+        "operationId": "openCheckout",
+        "summary": "Start a purchase",
+        "description": "Creates a payment and returns somewhere to pay it. The body says WHAT is being bought; it cannot say what that costs. There is no amount field, one sent anyway is stripped before validation, and the price is read server-side from the Plan row or the unlock-price setting — `amountBdt` in the response is what will be charged.\n\nThe two purposes are not interchangeable. `ITINERARY_UNLOCK` takes an `itineraryId` you own and buys the full length of that one trip, permanently. `SUBSCRIPTION` takes a `planCode` naming a plan that is on sale AND billed monthly.\n\nUNLOCK_SINGLE is refused here with a 400. It is a price, not a tier: granting it as a subscription would turn one 200 BDT payment into an account-wide upgrade, so a checkout for any plan whose interval is NONE is rejected rather than quietly downgraded.\n\n`redirectUrl` is absolute and points at the public website, not at this API. Send the browser there, then poll GET /api/v1/payments/{id}.",
+        "tags": [
+          "Payments"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CheckoutBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The payment was created. Nothing has been charged or granted yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckoutResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request body was not valid JSON, or failed schema validation. `details` names the offending fields. Also returned when `itineraryId` is missing for an unlock, when `planCode` is missing for a subscription, or when the named plan is a one-off price rather than a monthly tier.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The configured gateway refuses to open a checkout here. For the sandbox provider that means PAYMENTS_MOCK_ENABLED is off, or NODE_ENV is production without PAYMENTS_ALLOW_MOCK_IN_PRODUCTION also set. The message names both flags.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The itinerary was not found or belongs to another traveller, or no such plan is on sale. A retired plan answers the same as a code that was never issued.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "That itinerary is already unlocked in full — there is nothing to buy.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many checkouts started by this account in the last hour.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/payments/mock/{paymentId}/complete": {
+      "post": {
+        "operationId": "completeMockPayment",
+        "summary": "Settle a sandbox payment",
+        "description": "The simulated gateway's Pay / Decline / Cancel button. Stands in for the callback a real provider would send, and exists so the purchase flow can be exercised end to end without a merchant account.\n\nSAFE TO CALL TWICE, and clients should assume they will. The settlement is a conditional update predicated on the payment's current status, so a second completion grants nothing and returns exactly the body the first one did — `grant` included, because it is read back from the entitlement rather than reported by the settlement. A double-clicked Pay button buys one unlock.\n\nOn SUCCESS the entitlement is granted in the SAME transaction that marks the payment SUCCEEDED: an ItineraryUnlock for that trip, or a Subscription running one month from now. FAILURE and CANCEL both end in a FAILED payment and grant nothing; they are distinguished because a decline and an abandonment are different facts about a funnel.\n\nReaches only payments this traveller owns AND that the sandbox created. A real gateway's payment is not settleable here at any price.",
+        "tags": [
+          "Payments"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "paymentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MockCompletionBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The payment in its final state, and what it granted. Identical on a repeated call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentCompletionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request body was not valid JSON, or failed schema validation. `details` names the offending fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The sandbox gateway is not permitted here. PAYMENTS_MOCK_ENABLED is off, or NODE_ENV is production without PAYMENTS_ALLOW_MOCK_IN_PRODUCTION also set — it grants real entitlements without taking real money, so it takes two independent flags to run there. The message names both.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such payment, or it belongs to another traveller. The two are deliberately indistinguishable, for the same reason an itinerary is. Also returned when the payment was created by a real gateway rather than the sandbox, which this route may not settle.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The payment can no longer be settled — its account was deleted, or the plan behind it is not a subscription tier.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/payments/{id}": {
+      "get": {
+        "operationId": "getPayment",
+        "summary": "One payment, for polling",
+        "description": "Where a payment has got to. The client sent the traveller off to a gateway and has no other way to learn the outcome — the settlement arrives as a callback on the server, not as a reply to anything the browser is holding open.\n\nWhile a payment is still in flight its status is confirmed with the provider before being reported, rather than read from our row alone: callbacks get lost, and \"pending\" shown for a payment that cleared ten minutes ago is how a support queue fills up. A terminal status is reported as it stands.\n\n`rawPayload` and `idempotencyKey` are never published. The first is a verbatim gateway body and the second is what stops a replayed callback granting twice.",
+        "tags": [
+          "Payments"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The payment.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such payment, or it belongs to another traveller. The two are deliberately indistinguishable, for the same reason an itinerary is.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/me/payments": {
+      "get": {
+        "operationId": "listMyPayments",
+        "summary": "The traveller's own payments",
+        "description": "Payment history, newest first. There is no parameter for whose payments to list: the user id comes from the token and goes straight into the query.\n\nSandbox payments ARE included, flagged by `isTest`. They granted real entitlements, so hiding them would leave somebody looking at an unlocked trip with nothing in their history to explain it. Test rows are filtered in the admin console and in revenue reporting, where the question is about money rather than about what somebody owns.\n\n`total` counts everything matching, ignoring `limit` and `offset`.",
+        "tags": [
+          "Payments"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "This traveller's payments.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A query parameter failed validation — a non-numeric `limit`, an out-of-range bound, an unknown enum value. `details[].path` names the parameter.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2173,6 +2537,88 @@
         ],
         "additionalProperties": false,
         "description": "The whole itinerary comes back, conflicts included: one edit can create a clash on a day the client was not looking at, and a partial response would hide it."
+      },
+      "CheckoutBody": {
+        "type": "object",
+        "properties": {
+          "purpose": {
+            "$ref": "#/components/schemas/CheckoutPurpose"
+          },
+          "itineraryId": {
+            "description": "Required for ITINERARY_UNLOCK, and must name an itinerary you own. Ignored otherwise.",
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "planCode": {
+            "description": "Required for SUBSCRIPTION. Must name a plan on sale whose interval is MONTHLY: UNLOCK_SINGLE is a price, not a tier, and is refused here.",
+            "type": "string",
+            "enum": [
+              "FREE",
+              "UNLOCK_SINGLE",
+              "PREMIUM_10",
+              "PREMIUM_50",
+              "PREMIUM_100"
+            ]
+          }
+        },
+        "required": [
+          "purpose"
+        ]
+      },
+      "CheckoutPurpose": {
+        "type": "string",
+        "enum": [
+          "ITINERARY_UNLOCK",
+          "SUBSCRIPTION"
+        ],
+        "description": "What is being bought. `ITINERARY_UNLOCK` is the one-off that opens a single trip in full, forever; `SUBSCRIPTION` is a monthly tier. They are not interchangeable — see `planCode`."
+      },
+      "CheckoutResponse": {
+        "type": "object",
+        "properties": {
+          "paymentId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "purpose": {
+            "$ref": "#/components/schemas/CheckoutPurpose"
+          },
+          "amountBdt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "What will be charged, in whole taka, read server-side from the Plan row or the unlock price setting. Any amount in the request body was ignored."
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "BKASH",
+              "SSLCOMMERZ",
+              "MANUAL_BANK",
+              "MOCK"
+            ]
+          },
+          "isTest": {
+            "type": "boolean",
+            "description": "True when the checkout was opened against the sandbox gateway. A client that renders a payment page MUST say so visibly when this is true."
+          },
+          "redirectUrl": {
+            "type": "string",
+            "format": "uri",
+            "description": "Where to send the traveller to pay. Absolute, and on the public web origin."
+          }
+        },
+        "required": [
+          "paymentId",
+          "purpose",
+          "amountBdt",
+          "provider",
+          "isTest",
+          "redirectUrl"
+        ],
+        "additionalProperties": false
       },
       "CreateBlockBody": {
         "type": "object",
@@ -3209,11 +3655,282 @@
         ],
         "additionalProperties": false
       },
+      "MockCompletionBody": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "$ref": "#/components/schemas/SettlementOutcome"
+          }
+        },
+        "required": [
+          "outcome"
+        ]
+      },
       "Password": {
         "type": "string",
         "minLength": 10,
         "maxLength": 200,
         "description": "At least 10 characters. No character-class requirements."
+      },
+      "PaymentCompletionResponse": {
+        "type": "object",
+        "properties": {
+          "payment": {
+            "$ref": "#/components/schemas/PaymentDetail"
+          },
+          "grant": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PaymentGrant"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the traveller now has. Null when the payment did not succeed. Identical on a repeated completion of the same payment — it is read back from the entitlement rather than reported by the settlement, so a double submit does not answer differently the second time."
+          }
+        },
+        "required": [
+          "payment",
+          "grant"
+        ],
+        "additionalProperties": false
+      },
+      "PaymentDetail": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "ITINERARY_UNLOCK",
+              "SUBSCRIPTION",
+              "BOOKING"
+            ]
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "BKASH",
+              "SSLCOMMERZ",
+              "MANUAL_BANK",
+              "MOCK"
+            ]
+          },
+          "amountBdt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Whole Bangladeshi taka. There is no minor unit and no fractional amount."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "INITIATED",
+              "PENDING",
+              "SUCCEEDED",
+              "FAILED",
+              "REFUNDED"
+            ]
+          },
+          "isTest": {
+            "type": "boolean",
+            "description": "True when no money moved — a sandbox payment. It still grants a real entitlement, which is exactly why it is labelled rather than hidden."
+          },
+          "itineraryId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The trip this payment unlocks, when it unlocks one."
+          },
+          "itineraryTitle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "planCode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "FREE",
+                  "UNLOCK_SINGLE",
+                  "PREMIUM_10",
+                  "PREMIUM_50",
+                  "PREMIUM_100"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The tier this payment buys, when it buys one."
+          },
+          "planName": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+          },
+          "settledAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When the attempt reached a terminal state — set for failures too. Always read it beside `status`; on its own it does not mean money arrived."
+          }
+        },
+        "required": [
+          "id",
+          "purpose",
+          "provider",
+          "amountBdt",
+          "status",
+          "isTest",
+          "itineraryId",
+          "itineraryTitle",
+          "planCode",
+          "planName",
+          "createdAt",
+          "settledAt"
+        ],
+        "additionalProperties": false
+      },
+      "PaymentGrant": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "ITINERARY_UNLOCK",
+              "SUBSCRIPTION"
+            ]
+          },
+          "itineraryId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "itineraryTitle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "planCode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "FREE",
+                  "UNLOCK_SINGLE",
+                  "PREMIUM_10",
+                  "PREMIUM_50",
+                  "PREMIUM_100"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "planName": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "activeUntil": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "End of the subscription period this payment funded. Null for a one-off unlock, which never expires."
+          }
+        },
+        "required": [
+          "kind",
+          "itineraryId",
+          "itineraryTitle",
+          "planCode",
+          "planName",
+          "activeUntil"
+        ],
+        "additionalProperties": false
+      },
+      "PaymentListResponse": {
+        "type": "object",
+        "properties": {
+          "payments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PaymentDetail"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Everything matching, ignoring `limit` and `offset`."
+          }
+        },
+        "required": [
+          "payments",
+          "total"
+        ],
+        "additionalProperties": false
       },
       "PlanListResponse": {
         "type": "object",
@@ -4393,6 +5110,15 @@
         ],
         "additionalProperties": false
       },
+      "SettlementOutcome": {
+        "type": "string",
+        "enum": [
+          "SUCCESS",
+          "FAILURE",
+          "CANCEL"
+        ],
+        "description": "What happened at the gateway. FAILURE and CANCEL both end in a FAILED payment and grant nothing; they are distinguished because a decline and an abandonment are different facts about a funnel."
+      },
       "TeaserPreview": {
         "type": "object",
         "properties": {
@@ -4525,17 +5251,18 @@
             ]
           },
           "deviceFingerprint": {
-            "description": "Opaque device fingerprint. Hashed with a server secret before storage; never persisted raw.",
             "type": "string",
             "minLength": 1,
-            "maxLength": 256
+            "maxLength": 256,
+            "description": "Opaque device fingerprint. Required: a request with no cookie, no forwarded address and no fingerprint identifies nobody, and the server refuses those rather than minting a fresh free preview for each one. Hashed with a server secret before storage; never persisted raw."
           }
         },
         "required": [
           "destination",
           "totalDays",
           "partySize",
-          "purpose"
+          "purpose",
+          "deviceFingerprint"
         ]
       },
       "TimelineConflict": {

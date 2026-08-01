@@ -185,6 +185,46 @@ describe('teaserCacheKey', () => {
     expect(teaserCacheKey({ ...answers, partySize: 3 })).not.toBe(teaserCacheKey(answers))
     expect(teaserCacheKey({ ...answers, purpose: 'FAMILY' })).not.toBe(teaserCacheKey(answers))
   })
+
+  it('keeps Bangla destinations apart', () => {
+    // The bug this pins: an ASCII-only filter mapped every non-Latin script to
+    // the empty string, so these four shared ONE cache entry and a traveller
+    // asking about Sylhet was served the preview written for Dhaka. Bangla is
+    // the primary market, so this is the normal path, not an edge case.
+    const cities = ['ঢাকা', 'কক্সবাজার', 'সিলেট', 'চট্টগ্রাম']
+    const keys = new Set(cities.map((destination) => teaserCacheKey({ ...answers, destination })))
+
+    expect(keys.size).toBe(cities.length)
+  })
+
+  it('keeps other non-Latin scripts apart', () => {
+    const keys = new Set(
+      ['東京', 'Дубай', 'مكة'].map((destination) => teaserCacheKey({ ...answers, destination }))
+    )
+
+    expect(keys.size).toBe(3)
+  })
+
+  it('folds Latin diacritics without folding Bangla matras', () => {
+    // Marks are decoration on a Latin base and meaning on a Bangla one, so the
+    // folding has to be script-aware: `bängkok` is `bangkok`, but `কর` is not
+    // `কার`.
+    expect(teaserCacheKey({ ...answers, destination: 'bängkok' })).toBe(
+      teaserCacheKey({ ...answers, destination: 'Bangkok' })
+    )
+    expect(teaserCacheKey({ ...answers, destination: 'কর' })).not.toBe(
+      teaserCacheKey({ ...answers, destination: 'কার' })
+    )
+  })
+
+  it('gives a punctuation-only destination its own key rather than a shared empty one', () => {
+    const bangs = teaserCacheKey({ ...answers, destination: '!!!' })
+    const queries = teaserCacheKey({ ...answers, destination: '???' })
+
+    expect(bangs).not.toBe(queries)
+    // Same input, same key — still cacheable, just not collidable.
+    expect(bangs).toBe(teaserCacheKey({ ...answers, destination: '!!!' }))
+  })
 })
 
 describe('DayBlockSchema — the catalog rule', () => {

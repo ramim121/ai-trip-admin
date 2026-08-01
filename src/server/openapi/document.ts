@@ -93,9 +93,17 @@ const API_TAGS: readonly OpenApiTag[] = [
   {
     name: 'Itineraries',
     description:
-      'A traveller\'s own trips and their timelines. Server-authoritative: the client says what ' +
+      "A traveller's own trips and their timelines. Server-authoritative: the client says what " +
       'it wants and the server decides what happens, down to recomputing every price from the ' +
-      'catalog. Conflicts are reported, never resolved by moving somebody\'s day.',
+      "catalog. Conflicts are reported, never resolved by moving somebody's day.",
+  },
+  {
+    name: 'Payments',
+    description:
+      'Buying an unlock or a subscription. The client names what it wants and never what it ' +
+      'costs — the price is read server-side on every call. Payments marked `isTest` were taken ' +
+      'by the sandbox gateway: no money moved, the entitlement is real, and any page rendering ' +
+      'one must say so.',
   },
   {
     name: 'Catalog',

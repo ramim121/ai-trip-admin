@@ -267,7 +267,8 @@ export function ActivityForm({
         <p className={HINT}>
           Whole taka per person — digits only, no decimal point and no comma. There is no minor unit
           in circulation, so a price with poisha in it is refused rather than rounded. Leave it
-          blank for a free sight, or for anything ops quotes case by case, and say which in the note.
+          blank for a free sight, or for anything ops quotes case by case, and say which in the
+          note.
         </p>
 
         <div className="mt-4 grid gap-4 sm:grid-cols-3">
@@ -326,8 +327,9 @@ export function ActivityForm({
         <h2 className="text-sm font-semibold tracking-tight">Opening hours</h2>
         <p className={HINT}>
           One window per line, as <code>Mon-Fri 09:00-17:00</code>. Ranges, comma lists and{' '}
-          <code>Daily</code> all work. For a venue that runs past midnight, write the closing time as
-          24:00 or later — 02:00 the next morning is <code>26:00</code>. A midday break is two lines.
+          <code>Daily</code> all work. For a venue that runs past midnight, write the closing time
+          as 24:00 or later — 02:00 the next morning is <code>26:00</code>. A midday break is two
+          lines.
         </p>
         <p className={HINT}>
           <strong>Leave this empty for somewhere always open</strong> — a beach, a viewpoint, a

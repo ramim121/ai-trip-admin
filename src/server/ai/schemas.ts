@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import type {
   BudgetBand as PrismaBudgetBand,
@@ -179,15 +180,59 @@ export type TeaserQuestionnaire = z.infer<typeof TeaserQuestionnaireSchema>
  * then drops the mark rather than the whole letter.
  */
 export function teaserCacheKey(answers: TeaserQuestionnaire): string {
-  const destination = answers.destination
-    .toLowerCase()
+  const destination = normaliseDestination(answers.destination)
+
+  return [destination, answers.totalDays, answers.partySize, answers.purpose].join('|')
+}
+
+/**
+ * Fold the spellings of one place together WITHOUT merging different places.
+ *
+ * The previous rule borrowed `normaliseInterest`'s ASCII filter, which is right
+ * for a tag we authored and wrong for a destination a traveller typed. Dropping
+ * everything outside `[a-z0-9-]` maps every non-Latin script to the EMPTY
+ * string, so `ঢাকা`, `কক্সবাজার`, `সিলেট`, `東京` and `Дубай` all became one
+ * cache entry. For a Bangladeshi company whose travellers type Bangla that is
+ * the normal path, not an edge case: it serves one visitor's preview to
+ * another, and it lets anyone seed a shared entry that later visitors are shown
+ * as our own copy.
+ *
+ * Diacritic folding is therefore applied to LATIN letters only. Stripping every
+ * combining mark would fix `bängkok` and break Bangla, where matras are not
+ * decoration — `কর` and `কার` are different words, and folding their marks would
+ * collide genuinely different destinations. So marks are removed only where they
+ * decompose from an ASCII base, and left alone everywhere else.
+ */
+function normaliseDestination(raw: string): string {
+  const slug = raw
     .normalize('NFKD')
-    .replace(/[\s_]+/g, '-')
-    .replace(/[^a-z0-9-]/g, '')
+    // A Latin base plus its marks becomes the bare base. Indic, Arabic and CJK
+    // marks are not preceded by [a-zA-Z], so they survive untouched.
+    .replace(/([a-zA-Z])\p{M}+/gu, '$1')
+    .normalize('NFC')
+    .toLowerCase()
+    // Intra-word punctuation vanishes rather than splitting, so "Cox's Bazar"
+    // and "coxs bazar" stay one entry.
+    .replace(/['‘’ʼ`´]/g, '')
+    // Everything else separates. Marks stay in the keep-class because they are
+    // part of the letter they follow, not punctuation between letters.
+    .replace(/[^\p{L}\p{N}\p{M}]+/gu, '-')
     .replace(/-{2,}/g, '-')
     .replace(/^-+|-+$/g, '')
 
-  return [destination, answers.totalDays, answers.partySize, answers.purpose].join('|')
+  // A destination of pure punctuation ("!!!") still satisfies the schema's
+  // min(1) and would otherwise collide with every other such string. Fall back
+  // to a digest of the raw value so the key stays unique. Caching it is still
+  // correct — an identical questionnaire deserves an identical answer.
+  if (slug === '') {
+    const digest = createHash('sha256')
+      .update(raw.normalize('NFKC').toLowerCase().trim())
+      .digest('hex')
+      .slice(0, 16)
+    return `x-${digest}`
+  }
+
+  return slug
 }
 
 /** The minimum needed to generate a day plan at all. */

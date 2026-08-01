@@ -685,7 +685,8 @@ function buildActivityWhere(input: SearchActivitiesInput): Prisma.ActivityWhereI
   const and: Prisma.ActivityWhereInput[] = []
 
   if (input.destinationId !== undefined) and.push({ destinationId: input.destinationId })
-  if (input.destinationSlug !== undefined) and.push({ destination: { slug: input.destinationSlug } })
+  if (input.destinationSlug !== undefined)
+    and.push({ destination: { slug: input.destinationSlug } })
   if (input.category !== undefined) and.push({ category: input.category })
 
   if (input.timeOfDay !== undefined && input.timeOfDay !== 'ANY') {
@@ -1144,7 +1145,9 @@ export function assertValidTimeWindow(
   endMinute: number
 ): void {
   if (!Number.isInteger(dayOfWeek) || dayOfWeek < 0 || dayOfWeek > 6) {
-    throw new InvalidTimeWindowError('dayOfWeek must be an integer from 0 (Sunday) to 6 (Saturday).')
+    throw new InvalidTimeWindowError(
+      'dayOfWeek must be an integer from 0 (Sunday) to 6 (Saturday).'
+    )
   }
   if (!Number.isInteger(startMinute) || startMinute < 0 || startMinute >= MINUTES_IN_DAY) {
     throw new InvalidTimeWindowError('startMinute must be from 0 to 1439, counted from midnight.')

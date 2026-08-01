@@ -318,6 +318,13 @@ enum PaymentProvider {
   BKASH
   SSLCOMMERZ
   MANUAL_BANK // large trip bookings settled by bank transfer
+
+  /// The sandbox gateway. Moves no money and settles on a button press, so the
+  /// purchase flows can be exercised end to end before a merchant account
+  /// exists. Every row it writes carries `isTest = true`, and it refuses to run
+  /// under NODE_ENV=production unless two independent environment flags both
+  /// say otherwise — see server/payments/mock.ts.
+  MOCK
 }
 
 enum PaymentPurpose {
@@ -368,6 +375,9 @@ model Plan {
   updatedAt DateTime @updatedAt
 
   subscriptions Subscription[]
+  /// Checkouts opened against this plan, settled or not. Also what makes the
+  /// Restrict on Payment.planId bite.
+  payments      Payment[]
 
   @@index([isActive, sortOrder])
   @@map("plans")
@@ -466,8 +476,49 @@ model Payment {
   provider PaymentProvider
   purpose  PaymentPurpose
 
+  /// What this payment is FOR, resolved at checkout and never afterwards.
+  ///
+  /// `settle()` is handed a payment id and nothing else — that is the shape
+  /// every real gateway callback arrives in, since the gateway knows our
+  /// reference and not our domain. So the target of the purchase has to be on
+  /// the payment itself, decided when the amount was decided, or a settlement
+  /// has no way to know which itinerary it just unlocked.
+  ///
+  /// The grant rows point back here (`ItineraryUnlock.paymentId`,
+  /// `Subscription.paymentId`), so after settlement the link exists in both
+  /// directions: this column records what was BOUGHT, those record what was
+  /// GRANTED, and a mismatch between them is detectable rather than invisible.
+  ///
+  /// Exactly one is set, chosen by `purpose`. Both null for BOOKING, which ops
+  /// settles by hand against a quote rather than against a row here.
+  itineraryId String?    @db.Uuid
+  itinerary   Itinerary? @relation(fields: [itineraryId], references: [id], onDelete: SetNull)
+
+  /// Restrict rather than SetNull: a plan with payments against it is a plan
+  /// that was sold, and deleting the row out from under the financial record
+  /// would leave "they paid 990 BDT for something" with no way to say what.
+  /// Plans are retired with `isActive = false`, never deleted.
+  planId String? @db.Uuid
+  plan   Plan?   @relation(fields: [planId], references: [id], onDelete: Restrict)
+
   amountBdt Int
   status    PaymentStatus @default(INITIATED)
+
+  /// True when no money moved — a row written by the sandbox gateway.
+  ///
+  /// This is a revenue-integrity column, not a debugging convenience. A mock
+  /// settlement grants a real entitlement, so its Payment row is
+  /// indistinguishable from a paid one in every other field: same provider
+  /// mechanics, same amount, same SUCCEEDED status, same ItineraryUnlock behind
+  /// it. Without a flag on the row itself, a revenue query written six months
+  /// from now would sum sandbox traffic as income, and no amount of care about
+  /// which provider values "look real" would catch it — MANUAL_BANK is also
+  /// settled by hand and is genuinely income.
+  ///
+  /// Defaults false so every existing row, and every future real gateway, is
+  /// income unless something explicitly says otherwise. Reporting filters
+  /// `isTest = false`; the admin console badges the true ones loudly.
+  isTest Boolean @default(false)
 
   /// The provider's own transaction id (bKash trxID, SSLCommerz val_id, or the
   /// bank reference typed in by ops).
@@ -491,6 +542,14 @@ model Payment {
   @@index([userId, status])
   @@index([provider, providerRef])
   @@index([status, createdAt])
+  /// Both readers of `isTest` scan in recency order: the admin list with test
+  /// rows filtered out, and any revenue report over a date range. Leading with
+  /// the flag lets both skip the sandbox rows without touching them.
+  @@index([isTest, createdAt])
+  /// "Has this traveller already paid for this trip?" — asked by every unlock
+  /// checkout before it opens a second one.
+  @@index([itineraryId])
+  @@index([planId])
   @@map("payments")
 }
 
@@ -982,6 +1041,9 @@ model Itinerary {
 
   days    ItineraryDay[]
   unlocks ItineraryUnlock[]
+  /// Checkouts opened against this trip. Distinct from `unlocks`: a payment
+  /// that failed or was abandoned appears here and never there.
+  payments Payment[]
 
   @@index([userId, status])
   @@index([destinationId])

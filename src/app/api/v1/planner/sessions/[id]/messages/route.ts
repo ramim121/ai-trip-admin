@@ -2,7 +2,8 @@ import type { NextRequest } from 'next/server'
 import { requireUser } from '@/server/http/guards'
 import { route } from '@/server/http/handler'
 import { parseJson } from '@/server/http/validate'
-import { canPrompt, entitlementRefused, userActor } from '@/server/modules/entitlements/service'
+import { enforceRateLimit } from '@/server/http/rate-limit'
+import { claimPrompt, entitlementRefused, userActor } from '@/server/modules/entitlements/service'
 import { streamPlannerTurn } from '@/server/modules/planner/chat'
 import { PlannerMessageBody } from '@/server/modules/planner/schema'
 import { loadSession } from '@/server/modules/planner/session'
@@ -20,10 +21,24 @@ import { loadSession } from '@/server/modules/planner/session'
  * turns out to contain an error is far harder for a client to handle and
  * impossible to retry cleanly.
  *
- * The prompt quota is checked here rather than inside the streaming service
- * because it is an entitlement question and not an AI one: `canPrompt` knows
- * about billing periods, and `chat.ts` deliberately knows only about tokens.
+ * The prompt quota is settled here rather than inside the streaming service
+ * because it is an entitlement question and not an AI one: the entitlement
+ * module knows about billing periods, and `chat.ts` deliberately knows only
+ * about tokens.
+ *
+ * Note `claimPrompt`, not `canPrompt`. The allowance is CLAIMED before the model
+ * is called, not merely read: a read leaves a window between the check and the
+ * increment as wide as the 45-second wall-clock timeout, and every request
+ * arriving inside it sees the same pre-claim count. Five hundred concurrent
+ * turns would all pass a thirty-turn ceiling and all bill a real call. The claim
+ * puts the ceiling in a WHERE clause and lets Postgres settle the race.
+ *
+ * The rate limit is a second, independent bound. The claim caps what a period
+ * costs; the limit caps how fast it can be spent, which is what stops a burst
+ * from opening hundreds of concurrent upstream requests at once.
  */
+const PLANNER_TURNS_PER_HOUR = 60
+
 export const POST = route(
   async (req: NextRequest, ctx: RouteContext<'/api/v1/planner/sessions/[id]/messages'>) => {
     const claims = await requireUser(req)
@@ -36,7 +51,16 @@ export const POST = route(
     // their own quota, or about whether this session exists.
     const session = await loadSession(actor, id)
 
-    const decision = await canPrompt(actor)
+    await enforceRateLimit(
+      {
+        key: `planner:turn:user:${claims.userId}`,
+        limit: PLANNER_TURNS_PER_HOUR,
+        windowSeconds: 3600,
+      },
+      'You are sending messages faster than we can plan. Give it a moment and try again.'
+    )
+
+    const decision = await claimPrompt(claims.userId)
     if (!decision.allowed) throw entitlementRefused(decision.refusal)
 
     return streamPlannerTurn({ actor, session, text: body.text })
