@@ -37,12 +37,22 @@ import type {
 /**
  * What may actually be bought through a checkout.
  *
- * A narrowing of the database's `PaymentPurpose`, which also has `BOOKING` —
- * large trips settled by bank transfer and recorded by ops. Narrowing at the
- * type level rather than validating later means there is no code path along
- * which a BOOKING intent reaches a provider at all.
+ * A narrowing of the database's `PaymentPurpose`. It used to exclude `BOOKING`,
+ * on the grounds that a booking was a large trip settled by bank transfer
+ * against a quote and never through self-service.
+ *
+ * That remains true of a quote-driven booking. It is no longer true of a seat
+ * on a dated group departure, which has a price the server can read, a party
+ * size, and a total already written to a `PackageBooking` row — so BOOKING is
+ * now a checkout purpose, pointing at that row through `bookingId`.
+ *
+ * The narrowing itself still matters: a purpose absent from this union has no
+ * code path to a provider at all, which is a stronger guarantee than a check.
  */
-export type CheckoutPurpose = Extract<PaymentPurpose, 'ITINERARY_UNLOCK' | 'SUBSCRIPTION'>
+export type CheckoutPurpose = Extract<
+  PaymentPurpose,
+  'ITINERARY_UNLOCK' | 'SUBSCRIPTION' | 'BOOKING'
+>
 
 /**
  * A payment the server has decided to take, before any gateway has seen it.
@@ -69,6 +79,16 @@ export interface PaymentIntent {
    * loaded the row to read its price; it passes on what it found.
    */
   readonly planId: string | null
+  /**
+   * The booking being paid for. Set iff `purpose` is BOOKING.
+   *
+   * The row already exists by the time an intent is built, and it already holds
+   * its seats and its agreed total. This id is how the settlement knows which
+   * booking to confirm — the same argument as `itineraryId`: a gateway callback
+   * arrives carrying our reference and nothing about our domain, so the target
+   * has to be on the payment.
+   */
+  readonly bookingId: string | null
   /**
    * Unique across every provider. The column it lands in is what stops a
    * replayed gateway callback granting twice.

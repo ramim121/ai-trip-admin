@@ -38,13 +38,13 @@ import type { EntitlementGrant } from './settlement'
 /**
  * Annotated with the provider layer's own union so the two cannot drift.
  *
- * `BOOKING` is a real `PaymentPurpose` and is absent here on purpose: it is
- * settled by bank transfer against a quote, and there is no self-service
- * checkout for it. Add it to `CheckoutPurpose` without adding it here and this
- * line stops compiling.
+ * `BOOKING` used to be absent here on purpose — settled by bank transfer
+ * against a quote, with no self-service path. A seat on a dated departure now
+ * has one, so it is listed. The annotation is what makes a disagreement between
+ * these two lists a compile error rather than a silent gap.
  */
 export const CheckoutPurposeSchema: z.ZodType<CheckoutPurpose> = z
-  .enum([PaymentPurpose.ITINERARY_UNLOCK, PaymentPurpose.SUBSCRIPTION])
+  .enum([PaymentPurpose.ITINERARY_UNLOCK, PaymentPurpose.SUBSCRIPTION, PaymentPurpose.BOOKING])
   .meta({
     id: 'CheckoutPurpose',
     description:
@@ -68,6 +68,14 @@ export const CheckoutBody = z
         'Required for SUBSCRIPTION. Must name a plan on sale whose interval is MONTHLY: ' +
           'UNLOCK_SINGLE is a price, not a tier, and is refused here.'
       ),
+    bookingId: z
+      .uuid()
+      .optional()
+      .describe(
+        'Required for BOOKING, and must name a booking you own that is still awaiting payment. ' +
+          'The amount charged is that booking’s stored total — seats, price and any discount ' +
+          'were all fixed when it was created, and nothing in this body can change them.'
+      ),
   })
   /*
    * Which field is required depends on the purpose, which no per-field rule can
@@ -81,6 +89,14 @@ export const CheckoutBody = z
         code: 'custom',
         path: ['itineraryId'],
         message: 'itineraryId is required when purpose is ITINERARY_UNLOCK.',
+      })
+    }
+
+    if (body.purpose === PaymentPurpose.BOOKING && body.bookingId === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['bookingId'],
+        message: 'bookingId is required when purpose is BOOKING.',
       })
     }
 

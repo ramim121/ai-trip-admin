@@ -1,5 +1,6 @@
 import {
   BillingInterval,
+  BookingStatus,
   PaymentProvider as PaymentProviderCode,
   PaymentPurpose,
   PaymentStatus,
@@ -82,9 +83,9 @@ export interface RequestContext {
 /**
  * Decide what this purchase actually is, and what it costs.
  *
- * Both branches end by reading a price out of the database. Note that neither
- * consults the request for anything but *which* thing is being bought: the body
- * names a target, and the server names the number.
+ * Every branch ends by reading a price out of the database. Note that none of
+ * them consults the request for anything but *which* thing is being bought: the
+ * body names a target, and the server names the number.
  */
 async function resolveIntent(userId: string, body: CheckoutBody): Promise<PaymentIntent> {
   const idempotencyKey = mockIdempotencyKey()
@@ -143,6 +144,54 @@ async function resolveIntent(userId: string, body: CheckoutBody): Promise<Paymen
        * `grantItineraryUnlock` has nothing to reach for even if it wanted to.
        */
       planId: null,
+      bookingId: null,
+      idempotencyKey,
+    }
+  }
+
+  if (body.purpose === PaymentPurpose.BOOKING) {
+    const bookingId = body.bookingId
+    if (bookingId === undefined) {
+      throw badRequest('bookingId is required when purpose is BOOKING.', [
+        { path: 'bookingId', message: 'Required for a booking.' },
+      ])
+    }
+
+    /*
+     * Ownership and state, both in the WHERE clause.
+     *
+     * `userId` for the same reason the itinerary branch has it — somebody
+     * else's booking is indistinguishable from one that does not exist.
+     * `status` because a booking that is already CONFIRMED has been paid for,
+     * and opening a second checkout against it is how one party pays twice for
+     * the same seats. A cancelled booking has released its seats and must not
+     * be resurrected by a payment either.
+     */
+    const booking = await db.packageBooking.findFirst({
+      where: { id: bookingId, userId, status: BookingStatus.PENDING_PAYMENT },
+      select: { id: true, totalBdt: true },
+    })
+
+    if (booking === null) {
+      throw notFound('That booking was not found, or is no longer awaiting payment.')
+    }
+
+    return {
+      userId,
+      purpose: PaymentPurpose.BOOKING,
+      /*
+       * The booking's own stored total.
+       *
+       * Not recomputed from the departure's price and the coupon's terms, which
+       * is the whole reason those figures were snapshot when the booking was
+       * created: a repricing between booking and payment must not change what
+       * somebody agreed to. The database enforces that this number equals
+       * subtotal minus discount, so it cannot have drifted from its own parts.
+       */
+      amountBdt: booking.totalBdt,
+      itineraryId: null,
+      planId: null,
+      bookingId: booking.id,
       idempotencyKey,
     }
   }
@@ -197,6 +246,7 @@ async function resolveIntent(userId: string, body: CheckoutBody): Promise<Paymen
     amountBdt: plan.priceBdt,
     itineraryId: null,
     planId: plan.id,
+    bookingId: null,
     idempotencyKey,
   }
 }
@@ -237,6 +287,7 @@ export async function openCheckout(
       isTest: provider.isTest,
       itineraryId: intent.itineraryId,
       planId: intent.planId,
+      bookingId: intent.bookingId,
     },
     ip: context.ip,
     userAgent: context.userAgent,

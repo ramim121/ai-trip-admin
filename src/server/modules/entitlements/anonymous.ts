@@ -203,6 +203,34 @@ function unknownSignal(): string {
  * where handing out a free generation is definitely wrong. Minting a row *is*
  * handing one out, so the two cannot be allowed to disagree about it.
  */
+/**
+ * Look a visitor up by cookie, without creating one and without touching them.
+ *
+ * `identifyVisitor` is the wrong tool for a read: it mints a row when nothing
+ * matches, which is exactly right when a quota is about to be spent and exactly
+ * wrong on a GET. A request that only wants to know "has this browser voted
+ * already" must not leave a visitor row behind, and must not stamp `lastSeenAt`
+ * either — a page view is not activity, and forging it here would corrupt the
+ * one signal the abuse queries read.
+ *
+ * Cookie only, deliberately. The IP and fingerprint arms of the union exist to
+ * re-find somebody who cleared their cookies, which is an anti-bypass measure
+ * worth its false positives when a quota is at stake. On a read it would mean
+ * showing one visitor another visitor's answer because they share an office
+ * router, so this arm is the narrow one.
+ */
+export async function findVisitorByCookie(
+  cookieId: string | null
+): Promise<{ id: string; cookieId: string } | null> {
+  const trimmed = cookieId?.trim()
+  if (!trimmed) return null
+
+  return db.anonymousVisitor.findUnique({
+    where: { cookieId: trimmed },
+    select: { id: true, cookieId: true },
+  })
+}
+
 export async function identifyVisitor(signals: VisitorSignals): Promise<IdentifiedVisitor | null> {
   const cookieId = signals.cookieId?.trim() || null
   const ipHash = hashIp(signals.ip)

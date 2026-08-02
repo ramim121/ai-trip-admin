@@ -41,6 +41,12 @@ interface FakeStep {
    * accord — the SDK only consults `stopWhen` when it could otherwise continue.
    */
   final?: boolean
+  /**
+   * The provider failed mid-stream, after the tokens above were already
+   * emitted and already billed. Surfaces as an `error` part, which is how the
+   * SDK reports it and what `chat.ts` re-throws from.
+   */
+  error?: string
 }
 
 interface StreamTextCapture {
@@ -84,7 +90,14 @@ const streamTextMock = vi.fn((options: any) => {
 
   const stopConditions = Array.isArray(options.stopWhen) ? options.stopWhen : [options.stopWhen]
   const stepResults: unknown[] = []
-  const emitted: { type: string; text: string }[] = []
+  /**
+   * The stream parts, in the order the SDK would yield them.
+   *
+   * `text` and `error` are both optional because a part carries one or the
+   * other, never both — a text delta has no error and an error part has no
+   * text. `chat.ts` switches on `type` before reading either.
+   */
+  const emitted: { type: string; text?: string; error?: unknown }[] = []
 
   const totals = { inputTokens: 0, outputTokens: 0, totalTokens: 0 }
 
@@ -106,6 +119,14 @@ const streamTextMock = vi.fn((options: any) => {
       capture.stepOutputs.push(outputTokens)
 
       emitted.push({ type: 'text-delta', text: scripted.text })
+
+      // Emitted after the deltas and after the usage was counted, which is the
+      // order that matters: the tokens above were produced and billed before
+      // the connection went wrong.
+      if (scripted.error !== undefined) {
+        emitted.push({ type: 'error', error: new Error(scripted.error) })
+        return
+      }
 
       const step = {
         stepNumber,
@@ -150,8 +171,22 @@ vi.mock('ai', async (importOriginal) => ({
 // ── Everything the turn touches ─────────────────────────────────────────────
 
 const destinationFindUnique = vi.fn()
+/**
+ * The spend log's insert.
+ *
+ * Stubbed rather than left undefined so the assertions below can read what was
+ * recorded. Leaving it off the mock is also a live demonstration of the swallow
+ * in `recordAiUsage` — the turn completes either way — but it does so by
+ * printing an error per test, and a suite that always prints errors is a suite
+ * nobody reads the errors of.
+ */
+const aiUsageEventCreate = vi.fn(async (..._args: unknown[]) => ({ id: 'usage-1' }))
+
 vi.mock('@/lib/db', () => ({
-  db: { destination: { findUnique: (...a: unknown[]) => destinationFindUnique(...a) as unknown } },
+  db: {
+    destination: { findUnique: (...a: unknown[]) => destinationFindUnique(...a) as unknown },
+    aiUsageEvent: { create: (...a: unknown[]) => aiUsageEventCreate(...a) as unknown },
+  },
 }))
 
 const getModel = vi.fn()
@@ -590,6 +625,59 @@ describe('counting the prompt', () => {
     await readFrames(response)
 
     expect(recordUsage).not.toHaveBeenCalled()
+  })
+
+  it('records the spend against the model that produced it, with the tokens', async () => {
+    // The quota counter and the spend log answer different questions and must
+    // not be confused: `recordUsage` is what the traveller is allowed, this is
+    // what it cost us. An anonymous turn spends no allowance and still spends
+    // money, so this row has to exist even where the counter does not.
+    const anonymous: Actor = { kind: 'anonymous', visitorId: VISITOR_ID }
+
+    const response = await streamPlannerTurn({
+      actor: anonymous,
+      session: { ...session(brief()), userId: null, anonymousVisitorId: VISITOR_ID },
+      text: 'Plan me three days.',
+    })
+    await readFrames(response)
+
+    expect(aiUsageEventCreate).toHaveBeenCalledTimes(1)
+    const [call] = aiUsageEventCreate.mock.calls as unknown as [[{ data: Record<string, unknown> }]]
+
+    expect(call[0].data).toMatchObject({
+      surface: 'PLANNER',
+      outcome: 'SUCCEEDED',
+      provider: 'google',
+      promptTokens: 100,
+      completionTokens: 40,
+      // Attributed to the visitor, not to a user. Spend with no owner is spend
+      // nobody can explain when the bill arrives.
+      userId: null,
+      anonymousVisitorId: VISITOR_ID,
+    })
+  })
+
+  it('records a failed turn as spend, because the provider still billed for it', async () => {
+    // The single most expensive thing to get wrong here. A turn that streamed
+    // for forty seconds and then timed out cost real tokens; recording nothing
+    // would make the console's totals understate the bill by exactly the calls
+    // that went wrong — the ones worth noticing.
+    scriptedSteps = [{ outputTokens: 40, text: 'Half an ans', final: false, error: 'upstream 503' }]
+
+    const response = await streamPlannerTurn({
+      actor: USER,
+      session: session(brief()),
+      text: 'Plan me three days.',
+    })
+    await readFrames(response)
+
+    expect(aiUsageEventCreate).toHaveBeenCalledTimes(1)
+    const [call] = aiUsageEventCreate.mock.calls as unknown as [[{ data: Record<string, unknown> }]]
+
+    expect(call[0].data).toMatchObject({ surface: 'PLANNER', outcome: 'FAILED' })
+    // The class of failure, never the message: a provider error quotes the
+    // request back, and this table is read by staff.
+    expect(call[0].data.errorKind).toBe('Error')
   })
 
   it('still finishes the turn when the counter write fails', async () => {

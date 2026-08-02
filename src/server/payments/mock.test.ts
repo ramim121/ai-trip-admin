@@ -118,6 +118,7 @@ function intent() {
     amountBdt: 200,
     itineraryId: ITINERARY_ID,
     planId: null,
+    bookingId: null,
     idempotencyKey: 'mock_test_key',
   }
 }

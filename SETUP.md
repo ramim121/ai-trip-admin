@@ -32,7 +32,7 @@ Create the database once. Any Postgres will do — local, Docker, or hosted.
 psql -U postgres -c "CREATE DATABASE beyond_borders;"
 ```
 
-**If your password contains `#`, `@`, `/`, `:` or `?`, percent-encode it in the connection string.** A raw `#` truncates the URL and Postgres silently receives the wrong password — `Wakawaka34#` must be written `Wakawaka34%23`. This costs people an hour more often than it should.
+**If your password contains `#`, `@`, `/`, `:` or `?`, percent-encode it in the connection string.** A raw `#` truncates the URL and Postgres silently receives the wrong password — a password of `Pa55w#rd` must be written `Pa55w%23rd`. This costs people an hour more often than it should.
 
 ---
 

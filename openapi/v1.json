@@ -2468,6 +2468,651 @@
           }
         }
       }
+    },
+    "/api/v1/packages": {
+      "get": {
+        "operationId": "listPackages",
+        "summary": "The Discover catalogue",
+        "description": "Trips designed in advance, as opposed to the ones the planner builds on demand. Only PUBLISHED rows are ever returned — drafts are absent rather than flagged, so no client has to remember to filter them.\n\n`scope` is optional and the website omits it: both tabs arrive in one response and the Domestic/International split happens client-side, so switching tabs costs no request. A mobile client on a slow connection can ask for one scope instead.\n\nTwo counts on each card look alike and are not. `registeredCount` is people on the interest list; `nextDeparture.seatsTaken` is seats actually held on a dated departure. An interest is a lead, a seat is a commitment, and they are never added together.",
+        "tags": [
+          "Discover"
+        ],
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "query",
+            "required": false,
+            "description": "Restrict to one tab. Omit for both — the website asks for both at once and splits them client-side, so switching tabs costs no request.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "DOMESTIC",
+                "INTERNATIONAL"
+              ]
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "description": "Filter by title, summary, destination label or country, case-insensitively.",
+            "schema": {
+              "type": "string",
+              "maxLength": 120
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Published packages, in curator order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PackageListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A query parameter failed validation — a non-numeric `limit`, an out-of-range bound, an unknown enum value. `details[].path` names the parameter.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/packages/{slug}": {
+      "get": {
+        "operationId": "getPackage",
+        "summary": "One trip, in full",
+        "description": "The day-by-day ships with this response rather than behind a second call: for a package the itinerary IS the product description. The leaders do too — \"who is running this\" is a reason people book a group trip, not a detail they go looking for afterwards.\n\n`departures` covers everything from today onwards, CANCELLED entries included. Somebody who had that date in mind should see it was cancelled rather than find it quietly missing.\n\nA DRAFT slug answers 404, identically to a slug that does not exist. A trip ops has not published is not a secret, but it is not an announcement either.",
+        "tags": [
+          "Discover"
+        ],
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The trip, its itinerary and its people.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PackageDetailResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No published trip has this slug.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/packages/{slug}/interest": {
+      "post": {
+        "operationId": "registerPackageInterest",
+        "summary": "Join a trip’s interest list",
+        "description": "The join list for a trip we have not costed yet, and the enquiry list for one we have. No account required, deliberately.\n\nIdempotent on (trip, email). Registering twice is a double-click or a correction, not two travellers — so a repeat call UPDATES the details and answers `created: false`. That matters because `registeredCount` is printed on a public card, and a duplicate would inflate the exact number the feature exists to communicate.\n\n`departureId` is validated against THIS trip. A departure id belonging to another package is a 404 rather than a silently mis-filed lead.\n\nA traveller token is optional. Sending one attaches the account to the row, which is how ops sees that a lead is already a customer; it does not replace the address they typed.",
+        "tags": [
+          "Discover"
+        ],
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterInterestBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Registered, or the existing registration updated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisterInterestResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request body was not valid JSON, or failed schema validation. `details` names the offending fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No published trip has this slug, or that departure is not on it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "That departure has been cancelled or has already run.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many registrations from this network in the last hour. The limit counts resolved edge addresses; callers whose address cannot be resolved share one pool.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/polls/active": {
+      "get": {
+        "operationId": "getActivePoll",
+        "summary": "The poll running right now, if there is one",
+        "description": "Answers `{ poll: null }` rather than 404 when nothing is running: a site with no poll is a normal state, not a failed request, and the section renders nothing at all in that case.\n\nRESULTS ARE OMITTED, NOT HIDDEN. Until this viewer has voted, every `votes` and `share` is `null` and `resultsVisible` is false. Shipping the tallies alongside a flag would put them one devtools tab away, and \"results after voting\" would be decoration rather than a rule. Null means withheld; it never means zero.\n\nResults do become visible without voting in two cases: a poll configured to show them up front, and a poll that has closed — otherwise a finished poll would stay a locked box for everyone who never got round to it.\n\nRecognition is by visitor cookie alone and creates nothing. A browser we do not recognise simply reads as \"has not voted\".",
+        "tags": [
+          "Polls"
+        ],
+        "responses": {
+          "200": {
+            "description": "The open poll, or null.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActivePollResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/polls/{slug}/vote": {
+      "post": {
+        "operationId": "castPollVote",
+        "summary": "Vote, once",
+        "description": "One vote per voter is a UNIQUE constraint in Postgres, not a check in application code. A poll whose numbers can be inflated by opening a second tab is a poll whose numbers are worthless.\n\nA second vote is NOT an error: it answers 200 with `counted: false` and the results, which is what a returning visitor wanted anyway. So does voting on a poll that closed while the page was open.\n\nA signed-in caller is identified by their account. Everyone else is identified by the union of cookie, hashed edge address and `deviceFingerprint` — a hit on any one is the same person. A caller matching none of the three is refused with 400: a voter with no identity can vote any number of times.\n\nSigning in after voting anonymously produces a different voter identity, deliberately. The alternative would refuse a genuine first vote from a new account because a stranger on the same office router had already voted.",
+        "tags": [
+          "Polls"
+        ],
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CastVoteBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The vote was counted, or had already been cast. Results included either way.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CastVoteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body failed validation, or this browser could not be identified well enough to count a vote.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No poll has this slug, or that option is not on it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many votes from this network in the last hour.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/past-trips": {
+      "get": {
+        "operationId": "listPastTrips",
+        "summary": "Trips we have already run",
+        "description": "Published trips, most recent first — ordered by the date the trip STARTED rather than the date it was written up, because a trip published six months late is still a trip from six months ago.\n\n`overallAverage` is the only single figure this API computes, and it exists for the card. It is a mean of the per-axis means rather than of every score, so an axis two people answered cannot swing it and an axis everybody answered cannot dominate it. Null until somebody has reviewed — never 0.\n\n`memberCount` is how many travelled. The participants themselves are never published: naming fourteen people would put a social graph on a public page that none of them agreed to.",
+        "tags": [
+          "Past trips"
+        ],
+        "responses": {
+          "200": {
+            "description": "Published trips, newest first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PastTripListResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/past-trips/{slug}": {
+      "get": {
+        "operationId": "getPastTrip",
+        "summary": "One trip, as it actually went",
+        "description": "The whole record in one response: the story, the highlights, the approved gallery, every approved review with its own scores, and the per-dimension averages.\n\nHIGHLIGHTS INCLUDE INCIDENTS. `TripHighlightKind.INCIDENT` is the thing that went wrong — the cancelled ferry, the failed generator, the animal nobody saw — and it is published beside the sunrise on purpose. A record containing only the good parts is a brochure, and readers discount brochures entirely.\n\nRATINGS ARE PER AXIS, NOT A STAR. `ratingSummary` carries one entry for each dimension anybody has rated, with its own average and its own response count, and there is deliberately no overall score in this response. A trip with superb guiding and poor transport averages to something unremarkable, and that single number hides the two facts a reader would decide on.\n\nUnapproved photographs and reviews are ABSENT rather than flagged — the filter is a WHERE clause, not a field a client is trusted to check. A DRAFT slug answers 404, identically to a slug that does not exist.",
+        "tags": [
+          "Past trips"
+        ],
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The trip, its highlights, its gallery and its reviews.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PastTripDetailResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No published trip has this slug.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/packages/{slug}/bookings/quote": {
+      "post": {
+        "operationId": "quoteBooking",
+        "summary": "What would these seats cost?",
+        "description": "Prices a party on a departure and applies a promo code if one is sent. Writes nothing — no booking, no redemption, and no seat held.\n\nA REFUSED CODE STILL RETURNS A PRICE. `couponRefusal` is populated, `coupon` is null and the total is undiscounted. Answering 400 would blank the price while somebody is halfway through typing a code; the booking endpoint refuses the same code properly, so nothing can be bought at the wrong price.\n\nRefusal reasons are a closed vocabulary — UNKNOWN, INACTIVE, NOT_STARTED, EXPIRED, WRONG_PACKAGE, BELOW_MIN_SPEND, FULLY_REDEEMED, ALREADY_USED. Branch on the reason, not the message.\n\nNo session required. Somebody deciding whether a trip is affordable has not signed in yet — the per-account redemption ceiling then cannot bind, which is why a code relying on `maxPerUser` should also carry `maxRedemptions`.\n\nNo request body on this endpoint carries an amount, a unit price, a discount or a total. The client names a departure, a party size and at most a promo code; every figure comes back from the server, which reads the departure price and the coupon terms itself.",
+        "tags": [
+          "Bookings"
+        ],
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuoteBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The price, and how the code fared.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request body was not valid JSON, or failed schema validation. `details` names the offending fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No published trip has this slug, or that departure is not on it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "That departure is cancelled or already run, or the trip has no price set — an INTEREST_ONLY trip cannot be booked and answers here rather than pretending to quote.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/packages/{slug}/bookings": {
+      "post": {
+        "operationId": "createBooking",
+        "summary": "Hold the seats",
+        "description": "Creates a booking in PENDING_PAYMENT and claims its seats immediately, before anybody pays. Send the returned `bookingId` to POST /api/v1/payments/checkout with `purpose: BOOKING`.\n\nSEATS ARE HELD NOW, NOT AT SETTLEMENT. Claiming on payment would let two travellers both reach a payment page for the last seat, and one of them would pay for something that no longer exists. The claim is a single UPDATE whose WHERE clause compares `seatsTaken + n` against `capacity`, so of two concurrent requests for one seat exactly one succeeds and the other gets a 409.\n\nUnlike the quote, a promo code that does not apply is a 400 here: charging the full price for a booking somebody submitted expecting a discount is the one outcome nobody would forgive.\n\nA session IS required, unlike registering interest. This holds inventory and creates something that will be charged, so it needs an owner — and an anonymous seat hold is free denial-of-service against a departure.\n\nEvery figure comes back in the response: unit price, subtotal, discount and total. Render those rather than recomputing, so what is shown and what is charged cannot disagree.",
+        "tags": [
+          "Bookings"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateBookingBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Seats held. Nothing is paid yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateBookingResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body failed validation, or the promo code sent does not apply — `details[].path` is `couponCode` and the message names the reason.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No published trip has this slug, or that departure is not on it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Not enough seats left for that party, or the departure is cancelled, already run, or uncosted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many bookings started from this account in the last hour.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/me/bookings": {
+      "get": {
+        "operationId": "listMyBookings",
+        "summary": "The traveller’s own bookings",
+        "description": "Newest first. There is no parameter for whose bookings to list: the user id comes from the token and goes straight into the query.\n\nEvery booking carries the figures it was MADE with rather than today’s price. A departure repriced next week does not restate a receipt, and an expired coupon does not retroactively raise a total.\n\n`bookedAt` and `confirmedAt` are two different dates: when the seats were held, and when the money landed. The second is null while a booking is still awaiting payment.",
+        "tags": [
+          "Bookings"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "This traveller’s bookings.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BookingListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2489,6 +3134,26 @@
         },
         "required": [
           "message"
+        ],
+        "additionalProperties": false
+      },
+      "ActivePollResponse": {
+        "type": "object",
+        "properties": {
+          "poll": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PublicPoll"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null when no poll is running. Render nothing."
+          }
+        },
+        "required": [
+          "poll"
         ],
         "additionalProperties": false
       },
@@ -2519,6 +3184,30 @@
         ],
         "additionalProperties": false
       },
+      "AppliedCoupon": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string",
+            "description": "What to show when it applies, e.g. \"Early bird — 15% off\"."
+          },
+          "discountBdt": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Whole taka off the subtotal. Never zero."
+          }
+        },
+        "required": [
+          "code",
+          "label",
+          "discountBdt"
+        ],
+        "additionalProperties": false
+      },
       "BlockMutationResponse": {
         "type": "object",
         "properties": {
@@ -2537,6 +3226,57 @@
         ],
         "additionalProperties": false,
         "description": "The whole itinerary comes back, conflicts included: one edit can create a clash on a day the client was not looking at, and a partial response would hide it."
+      },
+      "BookingListResponse": {
+        "type": "object",
+        "properties": {
+          "bookings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicBooking"
+            }
+          }
+        },
+        "required": [
+          "bookings"
+        ],
+        "additionalProperties": false
+      },
+      "CastVoteBody": {
+        "type": "object",
+        "properties": {
+          "optionId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "deviceFingerprint": {
+            "description": "The same weak signal the planner preview uses to recognise a browser. It is one of three, and it is not trusted on its own.",
+            "type": "string",
+            "maxLength": 256
+          }
+        },
+        "required": [
+          "optionId"
+        ]
+      },
+      "CastVoteResponse": {
+        "type": "object",
+        "properties": {
+          "counted": {
+            "type": "boolean",
+            "description": "False when this voter had already voted, or the poll had closed. Not an error — the results come back either way, which is what a returning visitor wanted."
+          },
+          "poll": {
+            "description": "With results now visible, since they have voted.",
+            "$ref": "#/components/schemas/PublicPoll"
+          }
+        },
+        "required": [
+          "counted",
+          "poll"
+        ],
+        "additionalProperties": false
       },
       "CheckoutBody": {
         "type": "object",
@@ -2560,6 +3300,12 @@
               "PREMIUM_50",
               "PREMIUM_100"
             ]
+          },
+          "bookingId": {
+            "description": "Required for BOOKING, and must name a booking you own that is still awaiting payment. The amount charged is that booking’s stored total — seats, price and any discount were all fixed when it was created, and nothing in this body can change them.",
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
           }
         },
         "required": [
@@ -2570,7 +3316,8 @@
         "type": "string",
         "enum": [
           "ITINERARY_UNLOCK",
-          "SUBSCRIPTION"
+          "SUBSCRIPTION",
+          "BOOKING"
         ],
         "description": "What is being bought. `ITINERARY_UNLOCK` is the one-off that opens a single trip in full, forever; `SUBSCRIPTION` is a monthly tier. They are not interchangeable — see `planCode`."
       },
@@ -2700,6 +3447,113 @@
           "endMinute"
         ],
         "description": "Cost is never accepted here — it is recomputed from the catalog price and the party size."
+      },
+      "CreateBookingBody": {
+        "type": "object",
+        "properties": {
+          "departureId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "partySize": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 40,
+            "description": "Seats wanted. Bounded so a public form cannot ask for two billion."
+          },
+          "couponCode": {
+            "description": "Case-insensitive; uppercased before lookup.",
+            "type": "string",
+            "maxLength": 40
+          },
+          "contactName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "contactEmail": {
+            "type": "string",
+            "maxLength": 254,
+            "format": "email",
+            "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+            "description": "Lowercased before storage."
+          },
+          "contactPhone": {
+            "type": "string",
+            "maxLength": 40
+          },
+          "notes": {
+            "type": "string",
+            "maxLength": 1000
+          }
+        },
+        "required": [
+          "departureId",
+          "partySize",
+          "contactName",
+          "contactEmail"
+        ]
+      },
+      "CreateBookingResponse": {
+        "type": "object",
+        "properties": {
+          "bookingId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "reference": {
+            "type": "string",
+            "description": "Short human code, e.g. `BB-7F3K2Q`. What a traveller quotes on the phone."
+          },
+          "partySize": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "unitPriceBdt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "subtotalBdt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "discountBdt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "totalBdt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "couponCode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "bookingId",
+          "reference",
+          "partySize",
+          "unitPriceBdt",
+          "subtotalBdt",
+          "discountBdt",
+          "totalBdt",
+          "couponCode"
+        ],
+        "additionalProperties": false
       },
       "CreatePlannerSessionBody": {
         "type": "object",
@@ -3666,11 +4520,65 @@
           "outcome"
         ]
       },
+      "PackageDetailResponse": {
+        "type": "object",
+        "properties": {
+          "package": {
+            "$ref": "#/components/schemas/PublicPackage"
+          }
+        },
+        "required": [
+          "package"
+        ],
+        "additionalProperties": false
+      },
+      "PackageListResponse": {
+        "type": "object",
+        "properties": {
+          "packages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicPackageSummary"
+            }
+          }
+        },
+        "required": [
+          "packages"
+        ],
+        "additionalProperties": false
+      },
       "Password": {
         "type": "string",
         "minLength": 10,
         "maxLength": 200,
         "description": "At least 10 characters. No character-class requirements."
+      },
+      "PastTripDetailResponse": {
+        "type": "object",
+        "properties": {
+          "trip": {
+            "$ref": "#/components/schemas/PublicPastTrip"
+          }
+        },
+        "required": [
+          "trip"
+        ],
+        "additionalProperties": false
+      },
+      "PastTripListResponse": {
+        "type": "object",
+        "properties": {
+          "trips": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicPastTripSummary"
+            }
+          }
+        },
+        "required": [
+          "trips"
+        ],
+        "additionalProperties": false
       },
       "PaymentCompletionResponse": {
         "type": "object",
@@ -4657,6 +5565,260 @@
         ],
         "additionalProperties": false
       },
+      "PublicBooking": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "PENDING_PAYMENT",
+              "CONFIRMED",
+              "CANCELLED",
+              "REFUNDED"
+            ]
+          },
+          "partySize": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "unitPriceBdt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "subtotalBdt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "discountBdt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "totalBdt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "couponCode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "couponLabel": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "packageSlug": {
+            "type": "string"
+          },
+          "packageTitle": {
+            "type": "string"
+          },
+          "destinationLabel": {
+            "type": "string"
+          },
+          "country": {
+            "type": "string"
+          },
+          "startDate": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+          },
+          "endDate": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+          },
+          "departureStatus": {
+            "type": "string",
+            "enum": [
+              "SCHEDULED",
+              "GUARANTEED",
+              "SOLD_OUT",
+              "CANCELLED",
+              "COMPLETED"
+            ]
+          },
+          "contactName": {
+            "type": "string"
+          },
+          "contactEmail": {
+            "type": "string"
+          },
+          "contactPhone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "bookedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+            "description": "When the booking was made — the date a traveller looks for on a receipt."
+          },
+          "confirmedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When the payment settled. Null while it is still awaiting payment."
+          },
+          "cancelledAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "reference",
+          "status",
+          "partySize",
+          "unitPriceBdt",
+          "subtotalBdt",
+          "discountBdt",
+          "totalBdt",
+          "couponCode",
+          "couponLabel",
+          "packageSlug",
+          "packageTitle",
+          "destinationLabel",
+          "country",
+          "startDate",
+          "endDate",
+          "departureStatus",
+          "contactName",
+          "contactEmail",
+          "contactPhone",
+          "bookedAt",
+          "confirmedAt",
+          "cancelledAt"
+        ],
+        "additionalProperties": false
+      },
+      "PublicDeparture": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "startDate": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$",
+            "description": "Calendar date, YYYY-MM-DD. Not a timestamp."
+          },
+          "endDate": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+          },
+          "capacity": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "seatsTaken": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "seatsLeft": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "`capacity - seatsTaken`. Published rather than left to each client to subtract."
+          },
+          "priceBdt": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Whole taka per person for THIS date, overriding the package price. Null means the package price applies — it does not mean free."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "SCHEDULED",
+              "GUARANTEED",
+              "SOLD_OUT",
+              "CANCELLED",
+              "COMPLETED"
+            ]
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "startDate",
+          "endDate",
+          "capacity",
+          "seatsTaken",
+          "seatsLeft",
+          "priceBdt",
+          "status",
+          "notes"
+        ],
+        "additionalProperties": false
+      },
       "PublicDestination": {
         "type": "object",
         "properties": {
@@ -4744,6 +5906,48 @@
         ],
         "additionalProperties": false
       },
+      "PublicDimensionAverage": {
+        "type": "object",
+        "properties": {
+          "dimension": {
+            "type": "string",
+            "enum": [
+              "ORGANISATION",
+              "ACCOMMODATION",
+              "FOOD",
+              "TRANSPORT",
+              "VALUE_FOR_MONEY",
+              "TRIP_LEADER",
+              "ACTIVITIES"
+            ]
+          },
+          "average": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 1,
+                "maximum": 5
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "One decimal. Null when nobody has rated this axis — never 0."
+          },
+          "responses": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "How many reviews scored it. A 5.0 from one person is not a 5.0."
+          }
+        },
+        "required": [
+          "dimension",
+          "average",
+          "responses"
+        ],
+        "additionalProperties": false
+      },
       "PublicOpeningHours": {
         "type": "object",
         "properties": {
@@ -4773,6 +5977,1076 @@
         ],
         "additionalProperties": false
       },
+      "PublicPackage": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "DOMESTIC",
+              "INTERNATIONAL"
+            ],
+            "description": "Which tab this belongs under."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "GROUP",
+              "INDIVIDUAL"
+            ]
+          },
+          "pricingMode": {
+            "type": "string",
+            "enum": [
+              "FIXED_PRICE",
+              "INTEREST_ONLY"
+            ],
+            "description": "FIXED_PRICE quotes a number. INTEREST_ONLY has not been costed yet and collects a list of people who would come instead — the price fields are then null by database constraint rather than by convention."
+          },
+          "destinationLabel": {
+            "type": "string"
+          },
+          "country": {
+            "type": "string"
+          },
+          "destinationSlug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set when the trip maps onto a catalog destination the planner also knows."
+          },
+          "durationDays": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "durationNights": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "priceFromBdt": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Whole taka per person. Null for INTEREST_ONLY, and null is not zero."
+          },
+          "priceToBdt": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set only when the price is genuinely a range. Null means `priceFromBdt` is it."
+          },
+          "groupSizeMin": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "GROUP trips only; null on an INDIVIDUAL package."
+          },
+          "groupSizeMax": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "heroImageUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cardImageUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "highlights": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "registeredCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "People on the interest list, withdrawals excluded. NOT seats sold — a seat is a commitment on a dated departure and lives on `seatsTaken`."
+          },
+          "upcomingDepartureCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "nextDeparture": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PublicDeparture"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The soonest joinable date, or null."
+          },
+          "primaryLeader": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PublicTripLeader"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "description": {
+            "type": "string"
+          },
+          "inclusions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "exclusions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "metaTitle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "metaDescription": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "days": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicPackageDay"
+            },
+            "description": "The published day-by-day. For a package this IS the product description."
+          },
+          "departures": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicDeparture"
+            },
+            "description": "Every departure from today onwards, CANCELLED ones included — somebody who had that date in mind should see it was cancelled rather than find it missing."
+          },
+          "leaders": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicTripLeader"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "slug",
+          "title",
+          "summary",
+          "scope",
+          "kind",
+          "pricingMode",
+          "destinationLabel",
+          "country",
+          "destinationSlug",
+          "durationDays",
+          "durationNights",
+          "priceFromBdt",
+          "priceToBdt",
+          "groupSizeMin",
+          "groupSizeMax",
+          "heroImageUrl",
+          "cardImageUrl",
+          "highlights",
+          "registeredCount",
+          "upcomingDepartureCount",
+          "nextDeparture",
+          "primaryLeader",
+          "description",
+          "inclusions",
+          "exclusions",
+          "metaTitle",
+          "metaDescription",
+          "days",
+          "departures",
+          "leaders"
+        ],
+        "additionalProperties": false
+      },
+      "PublicPackageDay": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "dayNumber": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "description": "1-based. Day 1 is the first day, not an index."
+          },
+          "title": {
+            "type": "string"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "accommodation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null on the last day, when there is none."
+          },
+          "meals": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Meals included that day, e.g. [\"Breakfast\",\"Dinner\"]."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicPackageItineraryItem"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "dayNumber",
+          "title",
+          "summary",
+          "accommodation",
+          "meals",
+          "items"
+        ],
+        "additionalProperties": false
+      },
+      "PublicPackageItineraryItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "ACTIVITY",
+              "TRANSIT",
+              "MEAL",
+              "REST",
+              "FREE",
+              "ACCOMMODATION"
+            ],
+            "description": "The planner’s vocabulary, reused so both kinds of day render the same way."
+          },
+          "title": {
+            "type": "string"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "startMinute": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Minutes from local midnight; 540 is 09:00. NULL is deliberate rather than missing — \"afternoon at leisure\" has no start time and must not be given a fake one."
+          },
+          "durationMinutes": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "title",
+          "detail",
+          "startMinute",
+          "durationMinutes"
+        ],
+        "additionalProperties": false
+      },
+      "PublicPackageSummary": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "DOMESTIC",
+              "INTERNATIONAL"
+            ],
+            "description": "Which tab this belongs under."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "GROUP",
+              "INDIVIDUAL"
+            ]
+          },
+          "pricingMode": {
+            "type": "string",
+            "enum": [
+              "FIXED_PRICE",
+              "INTEREST_ONLY"
+            ],
+            "description": "FIXED_PRICE quotes a number. INTEREST_ONLY has not been costed yet and collects a list of people who would come instead — the price fields are then null by database constraint rather than by convention."
+          },
+          "destinationLabel": {
+            "type": "string"
+          },
+          "country": {
+            "type": "string"
+          },
+          "destinationSlug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set when the trip maps onto a catalog destination the planner also knows."
+          },
+          "durationDays": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "durationNights": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "priceFromBdt": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Whole taka per person. Null for INTEREST_ONLY, and null is not zero."
+          },
+          "priceToBdt": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set only when the price is genuinely a range. Null means `priceFromBdt` is it."
+          },
+          "groupSizeMin": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "GROUP trips only; null on an INDIVIDUAL package."
+          },
+          "groupSizeMax": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "heroImageUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cardImageUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "highlights": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "registeredCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "People on the interest list, withdrawals excluded. NOT seats sold — a seat is a commitment on a dated departure and lives on `seatsTaken`."
+          },
+          "upcomingDepartureCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "nextDeparture": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PublicDeparture"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The soonest joinable date, or null."
+          },
+          "primaryLeader": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PublicTripLeader"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "slug",
+          "title",
+          "summary",
+          "scope",
+          "kind",
+          "pricingMode",
+          "destinationLabel",
+          "country",
+          "destinationSlug",
+          "durationDays",
+          "durationNights",
+          "priceFromBdt",
+          "priceToBdt",
+          "groupSizeMin",
+          "groupSizeMax",
+          "heroImageUrl",
+          "cardImageUrl",
+          "highlights",
+          "registeredCount",
+          "upcomingDepartureCount",
+          "nextDeparture",
+          "primaryLeader"
+        ],
+        "additionalProperties": false
+      },
+      "PublicPastTrip": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "destinationLabel": {
+            "type": "string"
+          },
+          "country": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "DOMESTIC",
+              "INTERNATIONAL"
+            ]
+          },
+          "startDate": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$",
+            "description": "Calendar date, YYYY-MM-DD. Not a timestamp."
+          },
+          "endDate": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+          },
+          "memberCount": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "description": "How many travelled. The names are not published."
+          },
+          "heroImageUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "packageSlug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set when this was a running of something still on sale."
+          },
+          "packageTitle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reviewCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Approved reviews only."
+          },
+          "overallAverage": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 1,
+                "maximum": 5
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A mean of the per-axis means, for the card only — so an axis nobody rated cannot pull it. Null until somebody reviews. The detail response deliberately does not lead with this: it carries `ratingSummary`, which is the honest form."
+          },
+          "leaders": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicTripLeaderCredit"
+            }
+          },
+          "story": {
+            "type": "string"
+          },
+          "metaTitle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "metaDescription": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "highlights": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicTripHighlight"
+            }
+          },
+          "gallery": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicTripPhoto"
+            },
+            "description": "Approved photographs only. Pending and rejected rows are absent, not flagged."
+          },
+          "reviews": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicTripReview"
+            },
+            "description": "Approved reviews only, newest first."
+          },
+          "ratingSummary": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicDimensionAverage"
+            },
+            "description": "One entry per axis anybody has rated. There is no overall score here on purpose — a trip with superb guiding and poor transport averages to something unremarkable, and that single figure hides the two facts a reader would decide on."
+          }
+        },
+        "required": [
+          "id",
+          "slug",
+          "title",
+          "summary",
+          "destinationLabel",
+          "country",
+          "scope",
+          "startDate",
+          "endDate",
+          "memberCount",
+          "heroImageUrl",
+          "packageSlug",
+          "packageTitle",
+          "reviewCount",
+          "overallAverage",
+          "leaders",
+          "story",
+          "metaTitle",
+          "metaDescription",
+          "highlights",
+          "gallery",
+          "reviews",
+          "ratingSummary"
+        ],
+        "additionalProperties": false
+      },
+      "PublicPastTripSummary": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "destinationLabel": {
+            "type": "string"
+          },
+          "country": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "DOMESTIC",
+              "INTERNATIONAL"
+            ]
+          },
+          "startDate": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$",
+            "description": "Calendar date, YYYY-MM-DD. Not a timestamp."
+          },
+          "endDate": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+          },
+          "memberCount": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "description": "How many travelled. The names are not published."
+          },
+          "heroImageUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "packageSlug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set when this was a running of something still on sale."
+          },
+          "packageTitle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reviewCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Approved reviews only."
+          },
+          "overallAverage": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 1,
+                "maximum": 5
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A mean of the per-axis means, for the card only — so an axis nobody rated cannot pull it. Null until somebody reviews. The detail response deliberately does not lead with this: it carries `ratingSummary`, which is the honest form."
+          },
+          "leaders": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicTripLeaderCredit"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "slug",
+          "title",
+          "summary",
+          "destinationLabel",
+          "country",
+          "scope",
+          "startDate",
+          "endDate",
+          "memberCount",
+          "heroImageUrl",
+          "packageSlug",
+          "packageTitle",
+          "reviewCount",
+          "overallAverage",
+          "leaders"
+        ],
+        "additionalProperties": false
+      },
+      "PublicPoll": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string"
+          },
+          "question": {
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "DRAFT",
+              "OPEN",
+              "CLOSED"
+            ]
+          },
+          "closesAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null means open until somebody closes it."
+          },
+          "open": {
+            "type": "boolean",
+            "description": "Status AND window together. A poll left OPEN past its `closesAt` reports false here — do not re-derive this from `status` alone."
+          },
+          "resultsVisible": {
+            "type": "boolean",
+            "description": "True when the counts below are populated rather than null."
+          },
+          "votedOptionId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What this viewer already chose, so the page can mark it without a second call."
+          },
+          "totalVotes": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicPollOption"
+            }
+          }
+        },
+        "required": [
+          "slug",
+          "question",
+          "description",
+          "status",
+          "closesAt",
+          "open",
+          "resultsVisible",
+          "votedOptionId",
+          "totalVotes",
+          "options"
+        ],
+        "additionalProperties": false
+      },
+      "PublicPollOption": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "label": {
+            "type": "string"
+          },
+          "subtitle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "imageUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "votes": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null until this viewer may see results. Null means hidden, never zero."
+          },
+          "share": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "This option’s fraction of the total, 0–1, so no client has to divide by a total that may be zero. Null alongside a null `votes`."
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "subtitle",
+          "imageUrl",
+          "votes",
+          "share"
+        ],
+        "additionalProperties": false
+      },
       "PublicTag": {
         "type": "object",
         "properties": {
@@ -4787,6 +7061,313 @@
         "required": [
           "slug",
           "label"
+        ],
+        "additionalProperties": false
+      },
+      "PublicTripHighlight": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "MOMENT",
+              "INCIDENT",
+              "MILESTONE"
+            ],
+            "description": "MOMENT, MILESTONE — or INCIDENT, which is the thing that went wrong. Incidents are published on purpose: a record containing only the good parts is a brochure."
+          },
+          "title": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "dayNumber": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Which day it happened on. Null for something that ran through the whole trip."
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "title",
+          "body",
+          "dayNumber"
+        ],
+        "additionalProperties": false
+      },
+      "PublicTripLeader": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "LEADER",
+              "MANAGER",
+              "GUIDE"
+            ],
+            "description": "Their role on THIS trip, which may differ from their usual one."
+          },
+          "isPrimary": {
+            "type": "boolean",
+            "description": "At most one per trip. The name on the card."
+          },
+          "headline": {
+            "type": "string"
+          },
+          "bio": {
+            "type": "string"
+          },
+          "photoUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "yearsExperience": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tripsLed": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "languages": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "slug",
+          "name",
+          "role",
+          "isPrimary",
+          "headline",
+          "bio",
+          "photoUrl",
+          "yearsExperience",
+          "tripsLed",
+          "languages"
+        ],
+        "additionalProperties": false
+      },
+      "PublicTripLeaderCredit": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "LEADER",
+              "MANAGER",
+              "GUIDE"
+            ],
+            "description": "The role they held on THIS trip."
+          },
+          "headline": {
+            "type": "string"
+          },
+          "bio": {
+            "type": "string"
+          },
+          "photoUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "yearsExperience": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tripsLed": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "languages": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "slug",
+          "name",
+          "role",
+          "headline",
+          "bio",
+          "photoUrl",
+          "yearsExperience",
+          "tripsLed",
+          "languages"
+        ],
+        "additionalProperties": false
+      },
+      "PublicTripPhoto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "url": {
+            "type": "string"
+          },
+          "alt": {
+            "type": "string",
+            "description": "Never empty: a database CHECK refuses to approve a row without it."
+          },
+          "caption": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "url",
+          "alt",
+          "caption"
+        ],
+        "additionalProperties": false
+      },
+      "PublicTripRating": {
+        "type": "object",
+        "properties": {
+          "dimension": {
+            "type": "string",
+            "enum": [
+              "ORGANISATION",
+              "ACCOMMODATION",
+              "FOOD",
+              "TRANSPORT",
+              "VALUE_FOR_MONEY",
+              "TRIP_LEADER",
+              "ACTIVITIES"
+            ]
+          },
+          "score": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5
+          }
+        },
+        "required": [
+          "dimension",
+          "score"
+        ],
+        "additionalProperties": false
+      },
+      "PublicTripReview": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "author": {
+            "type": "string",
+            "description": "Their chosen display name, or the account’s. Never an email address."
+          },
+          "headline": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+          },
+          "ratings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicTripRating"
+            },
+            "description": "This reviewer’s own scores, so a reader can see who thought what."
+          }
+        },
+        "required": [
+          "id",
+          "author",
+          "headline",
+          "body",
+          "createdAt",
+          "ratings"
         ],
         "additionalProperties": false
       },
@@ -4832,6 +7413,119 @@
           "avatarUrl",
           "emailVerified",
           "createdAt"
+        ],
+        "additionalProperties": false
+      },
+      "QuoteBody": {
+        "type": "object",
+        "properties": {
+          "departureId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "partySize": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 40,
+            "description": "Seats wanted. Bounded so a public form cannot ask for two billion."
+          },
+          "couponCode": {
+            "description": "Case-insensitive; uppercased before lookup.",
+            "type": "string",
+            "maxLength": 40
+          }
+        },
+        "required": [
+          "departureId",
+          "partySize"
+        ]
+      },
+      "QuoteResponse": {
+        "type": "object",
+        "properties": {
+          "departureId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "startDate": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+          },
+          "endDate": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+          },
+          "partySize": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "unitPriceBdt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Per person, whole taka. The server’s figure."
+          },
+          "subtotalBdt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "`unitPriceBdt * partySize`."
+          },
+          "discountBdt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "totalBdt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "`subtotalBdt - discountBdt`. What will be charged."
+          },
+          "seatsLeft": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "coupon": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AppliedCoupon"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "couponRefusal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RejectedCoupon"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set when a code was sent and did not apply. The quote still carries a full price."
+          }
+        },
+        "required": [
+          "departureId",
+          "startDate",
+          "endDate",
+          "partySize",
+          "unitPriceBdt",
+          "subtotalBdt",
+          "discountBdt",
+          "totalBdt",
+          "seatsLeft",
+          "coupon",
+          "couponRefusal"
         ],
         "additionalProperties": false
       },
@@ -5066,6 +7760,95 @@
           "password",
           "name"
         ]
+      },
+      "RegisterInterestBody": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "email": {
+            "type": "string",
+            "maxLength": 254,
+            "format": "email",
+            "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+            "description": "Lowercased before storage; one registration per address."
+          },
+          "phone": {
+            "type": "string",
+            "maxLength": 40
+          },
+          "partySize": {
+            "default": 1,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 40
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "departureId": {
+            "description": "Which date they want. Validated against THIS package — a departure id from another trip is a 404, not a silently mis-filed lead.",
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          }
+        },
+        "required": [
+          "name",
+          "email"
+        ]
+      },
+      "RegisterInterestResponse": {
+        "type": "object",
+        "properties": {
+          "created": {
+            "type": "boolean",
+            "description": "False when this address was already on the list and the details were updated instead. Registering twice is a double-click, not two travellers."
+          },
+          "registeredCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "The list size afterwards."
+          }
+        },
+        "required": [
+          "created",
+          "registeredCount"
+        ],
+        "additionalProperties": false
+      },
+      "RejectedCoupon": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "enum": [
+              "UNKNOWN",
+              "INACTIVE",
+              "NOT_STARTED",
+              "EXPIRED",
+              "WRONG_PACKAGE",
+              "BELOW_MIN_SPEND",
+              "FULLY_REDEEMED",
+              "ALREADY_USED"
+            ],
+            "description": "Why the code did not apply. A closed vocabulary — branch on this rather than on the message."
+          },
+          "message": {
+            "type": "string",
+            "description": "Safe to show a traveller. Wording is not part of the contract."
+          }
+        },
+        "required": [
+          "reason",
+          "message"
+        ],
+        "additionalProperties": false
       },
       "ResetPasswordBody": {
         "type": "object",

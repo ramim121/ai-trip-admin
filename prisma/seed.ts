@@ -1,10 +1,22 @@
 import 'dotenv/config'
-import { AdminRole, BillingInterval, PlanCode } from '@/generated/prisma/enums'
+import {
+  AdminRole,
+  BillingInterval,
+  ModerationStatus,
+  PackageStatus,
+  CouponType,
+  PastTripStatus,
+  PlanCode,
+  type ReviewDimension,
+} from '@/generated/prisma/enums'
 import { db, disconnectDb } from '@/lib/db'
 import { hashPassword } from '@/server/auth/crypto'
 import { normalizeEmail } from '@/server/auth/email'
 import { MIN_PASSWORD_LENGTH } from '@/server/modules/auth/schema'
 import { DESTINATIONS, TAG_LABELS } from './seed-data/catalog'
+import { PACKAGES, POLLS, TRIP_LEADERS } from './seed-data/discover'
+import { SOUTH_ASIA_PACKAGES } from './seed-data/packages-south-asia'
+import { PAST_TRIPS, REVIEWERS } from './seed-data/past-trips'
 
 /**
  * Idempotent development seed: one SUPER_ADMIN and one demo traveller, the
@@ -604,6 +616,608 @@ async function seedCatalog(): Promise<CatalogCounts> {
   return counts
 }
 
+interface DiscoverCounts {
+  leaders: number
+  packages: number
+  departures: number
+  days: number
+  items: number
+  assignments: number
+  polls: number
+  pollOptions: number
+}
+
+/**
+ * A calendar date `days` from now, at UTC midnight.
+ *
+ * Departures are seeded relative to the run rather than as fixed dates. A seed
+ * with hard-coded dates quietly stops having any upcoming departures a few
+ * months after it is written, and Discover then shows a catalogue of trips that
+ * all appear to have already run.
+ */
+function dateInDays(days: number): Date {
+  const now = new Date()
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + days))
+}
+
+/**
+ * The Discover catalogue: trips, the people who run them, and the poll.
+ *
+ * Upsert-keyed on slug, like the catalog and for the same reason — this content
+ * is owned by the seed, so correcting a price here has to reach the database
+ * without anyone deleting rows by hand.
+ *
+ * Two different treatments of child rows, and the difference matters:
+ *
+ *   • Itinerary days, their items and the leader assignments are REPLACED
+ *     wholesale. They are pure content, so dropping a day from the seed has to
+ *     actually drop it — a merge would leave yesterday's day 4 behind forever.
+ *
+ *   • Departures and poll options are upserted in place, never deleted. Both
+ *     carry state the seed does not own: `seatsTaken` on a departure is real
+ *     bookings, and `voteCount` on an option is real votes. Replacing them would
+ *     silently reset both, which is a data-loss bug wearing the costume of an
+ *     idempotent seed.
+ */
+async function seedDiscover(): Promise<DiscoverCounts> {
+  const counts: DiscoverCounts = {
+    leaders: 0,
+    packages: 0,
+    departures: 0,
+    days: 0,
+    items: 0,
+    assignments: 0,
+    polls: 0,
+    pollOptions: 0,
+  }
+
+  const leaderIdBySlug = new Map<string, string>()
+
+  for (const leader of TRIP_LEADERS) {
+    const fields = {
+      name: leader.name,
+      role: leader.role,
+      headline: leader.headline,
+      bio: leader.bio,
+      yearsExperience: leader.yearsExperience,
+      tripsLed: leader.tripsLed,
+      languages: leader.languages,
+      sortOrder: leader.sortOrder,
+      isActive: true,
+    }
+
+    const { id } = await db.tripLeader.upsert({
+      where: { slug: leader.slug },
+      update: fields,
+      create: { slug: leader.slug, ...fields },
+      select: { id: true },
+    })
+
+    leaderIdBySlug.set(leader.slug, id)
+    counts.leaders += 1
+  }
+
+  const destinations = await db.destination.findMany({ select: { id: true, slug: true } })
+  const destinationIdBySlug = new Map(destinations.map((row) => [row.slug, row.id]))
+
+  for (const pkg of [...PACKAGES, ...SOUTH_ASIA_PACKAGES]) {
+    // A destination slug that resolves to nothing is a typo, and a typo that
+    // silently seeds `destinationId: null` produces a package that renders
+    // correctly and has quietly lost its link to the planner's inventory.
+    let destinationId: string | null = null
+    if (pkg.destinationSlug !== undefined) {
+      const resolved = destinationIdBySlug.get(pkg.destinationSlug)
+      if (resolved === undefined) {
+        throw new Error(
+          `Package "${pkg.slug}" references unknown destination "${pkg.destinationSlug}".`
+        )
+      }
+      destinationId = resolved
+    }
+
+    const fields = {
+      title: pkg.title,
+      summary: pkg.summary,
+      description: pkg.description,
+      scope: pkg.scope,
+      kind: pkg.kind,
+      pricingMode: pkg.pricingMode,
+      destinationId,
+      destinationLabel: pkg.destinationLabel,
+      country: pkg.country,
+      durationDays: pkg.durationDays,
+      durationNights: pkg.durationNights,
+      priceFromBdt: pkg.priceFromBdt ?? null,
+      priceToBdt: pkg.priceToBdt ?? null,
+      groupSizeMin: pkg.groupSizeMin ?? null,
+      groupSizeMax: pkg.groupSizeMax ?? null,
+      highlights: pkg.highlights,
+      inclusions: pkg.inclusions,
+      exclusions: pkg.exclusions,
+      status: pkg.status,
+      publishedAt: pkg.status === PackageStatus.PUBLISHED ? new Date() : null,
+      sortOrder: pkg.sortOrder,
+      metaTitle: `${pkg.title} · Beyond Borders`,
+      metaDescription: pkg.metaDescription,
+    }
+
+    const { id: packageId } = await db.travelPackage.upsert({
+      where: { slug: pkg.slug },
+      update: fields,
+      create: { slug: pkg.slug, ...fields },
+      select: { id: true },
+    })
+    counts.packages += 1
+
+    // Content: replaced wholesale. Cascade takes the items with the days.
+    await db.packageItineraryDay.deleteMany({ where: { packageId } })
+    for (const day of pkg.days) {
+      const { id: dayId } = await db.packageItineraryDay.create({
+        data: {
+          packageId,
+          dayNumber: day.dayNumber,
+          title: day.title,
+          summary: day.summary ?? null,
+          accommodation: day.accommodation ?? null,
+          meals: day.meals,
+        },
+        select: { id: true },
+      })
+      counts.days += 1
+
+      if (day.items.length > 0) {
+        await db.packageItineraryItem.createMany({
+          data: day.items.map((item, index) => ({
+            dayId,
+            kind: item.kind,
+            title: item.title,
+            detail: item.detail ?? null,
+            startMinute: item.startMinute ?? null,
+            durationMinutes: item.durationMinutes ?? null,
+            position: index,
+          })),
+        })
+        counts.items += day.items.length
+      }
+    }
+
+    await db.packageLeader.deleteMany({ where: { packageId } })
+    for (const [index, assignment] of pkg.leaders.entries()) {
+      const leaderId = leaderIdBySlug.get(assignment.slug)
+      if (leaderId === undefined) {
+        throw new Error(`Package "${pkg.slug}" references unknown leader "${assignment.slug}".`)
+      }
+
+      await db.packageLeader.create({
+        data: {
+          packageId,
+          leaderId,
+          role: assignment.role,
+          isPrimary: assignment.isPrimary === true,
+          sortOrder: index,
+        },
+        select: { id: true },
+      })
+      counts.assignments += 1
+    }
+
+    // State: upserted, never deleted. `seatsTaken` is real bookings.
+    for (const departure of pkg.departures) {
+      const startDate = dateInDays(departure.startsInDays)
+      const endDate = dateInDays(departure.startsInDays + departure.nights)
+
+      await db.packageDeparture.upsert({
+        where: { packageId_startDate: { packageId, startDate } },
+        // `seatsTaken` is deliberately absent from the update branch. Re-running
+        // the seed must not reset a departure that has since sold seats.
+        update: {
+          endDate,
+          capacity: departure.capacity,
+          priceBdt: departure.priceBdt ?? null,
+          status: departure.status,
+          notes: departure.notes ?? null,
+        },
+        create: {
+          packageId,
+          startDate,
+          endDate,
+          capacity: departure.capacity,
+          seatsTaken: departure.seatsTaken,
+          priceBdt: departure.priceBdt ?? null,
+          status: departure.status,
+          notes: departure.notes ?? null,
+        },
+        select: { id: true },
+      })
+      counts.departures += 1
+    }
+  }
+
+  for (const poll of POLLS) {
+    const fields = {
+      question: poll.question,
+      description: poll.description,
+      status: poll.status,
+      closesAt: dateInDays(poll.closesInDays),
+      showResultsBeforeVote: poll.showResultsBeforeVote,
+      sortOrder: poll.sortOrder,
+    }
+
+    const { id: pollId } = await db.poll.upsert({
+      where: { slug: poll.slug },
+      update: fields,
+      create: { slug: poll.slug, ...fields },
+      select: { id: true },
+    })
+    counts.polls += 1
+
+    // Options are matched on label rather than replaced. `voteCount` is real
+    // votes, and PollVote rows point at these ids — deleting and recreating
+    // would cascade the votes away and reset the poll on every seed run.
+    for (const option of poll.options) {
+      const existing = await db.pollOption.findFirst({
+        where: { pollId, label: option.label },
+        select: { id: true },
+      })
+
+      if (existing === null) {
+        await db.pollOption.create({
+          data: {
+            pollId,
+            label: option.label,
+            subtitle: option.subtitle,
+            sortOrder: option.sortOrder,
+          },
+          select: { id: true },
+        })
+      } else {
+        await db.pollOption.update({
+          where: { id: existing.id },
+          data: { subtitle: option.subtitle, sortOrder: option.sortOrder },
+          select: { id: true },
+        })
+      }
+      counts.pollOptions += 1
+    }
+  }
+
+  return counts
+}
+
+interface PastTripCounts {
+  reviewers: number
+  trips: number
+  leaders: number
+  participants: number
+  highlights: number
+  media: number
+  reviews: number
+  ratings: number
+}
+
+/**
+ * The trips we have already run, and what people said about them.
+ *
+ * Two idempotency strategies again, and the split is the same one the rest of
+ * this file makes. The trip and its content are upserted — the seed owns them.
+ * The reviewer ACCOUNTS are skipped if present, because they carry password
+ * hashes, and an upsert with a password in its update branch silently resets a
+ * credential somebody may have deliberately changed.
+ *
+ * Reviews are seeded APPROVED with a `reviewedAt`, which the migration's CHECK
+ * requires of any decided row. That is the one place this seed writes a
+ * moderation outcome without a human behind it, and it is confined to content
+ * this file authored: nothing here approves anything a traveller submitted.
+ */
+async function seedPastTrips(): Promise<PastTripCounts> {
+  const counts: PastTripCounts = {
+    reviewers: 0,
+    trips: 0,
+    leaders: 0,
+    participants: 0,
+    highlights: 0,
+    media: 0,
+    reviews: 0,
+    ratings: 0,
+  }
+
+  const password = credential('SEED_USER_PASSWORD', DEMO_USER_PASSWORD)
+  assertUsablePassword('SEED_USER_PASSWORD', password)
+
+  const userIdByEmail = new Map<string, string>()
+
+  for (const reviewer of REVIEWERS) {
+    const email = normalizeEmail(reviewer.email)
+
+    const existing = await db.user.findUnique({ where: { email }, select: { id: true } })
+    if (existing !== null) {
+      userIdByEmail.set(email, existing.id)
+      continue
+    }
+
+    const created = await db.user.create({
+      data: {
+        email,
+        name: reviewer.name,
+        passwordHash: await hashPassword(password),
+        // Pre-verified for the same reason the demo traveller is: local work on
+        // authenticated flows should not first need an email nobody can send.
+        emailVerifiedAt: new Date(),
+      },
+      select: { id: true },
+    })
+
+    userIdByEmail.set(email, created.id)
+    counts.reviewers += 1
+  }
+
+  const leaders = await db.tripLeader.findMany({ select: { id: true, slug: true } })
+  const leaderIdBySlug = new Map(leaders.map((row) => [row.slug, row.id]))
+
+  const packages = await db.travelPackage.findMany({ select: { id: true, slug: true } })
+  const packageIdBySlug = new Map(packages.map((row) => [row.slug, row.id]))
+
+  const now = new Date()
+
+  /**
+   * `YYYY-MM-DD` as a `@db.Date`.
+   *
+   * Fixed dates, unlike a departure's. A past trip only ever has to be in the
+   * past and already is, so relative dates bought nothing and cost the one
+   * thing that mattered: the month in a trip's title drifting away from the
+   * month on its page every time somebody reseeded.
+   */
+  const calendarDate = (iso: string): Date => new Date(`${iso}T00:00:00.000Z`)
+
+  for (const trip of PAST_TRIPS) {
+    // A package slug that resolves to nothing is a typo, and a typo that
+    // silently seeds `packageId: null` produces a trip that renders correctly
+    // and has quietly lost its link to what we still sell.
+    let packageId: string | null = null
+    if (trip.packageSlug !== undefined) {
+      const resolved = packageIdBySlug.get(trip.packageSlug)
+      if (resolved === undefined) {
+        throw new Error(
+          `Past trip "${trip.slug}" references unknown package "${trip.packageSlug}".`
+        )
+      }
+      packageId = resolved
+    }
+
+    const startDate = calendarDate(trip.startDate)
+    const endDate = calendarDate(trip.endDate)
+
+    const fields = {
+      title: trip.title,
+      summary: trip.summary,
+      story: trip.story,
+      packageId,
+      destinationLabel: trip.destinationLabel,
+      country: trip.country,
+      scope: trip.scope,
+      startDate,
+      endDate,
+      memberCount: trip.memberCount,
+      heroImageUrl: trip.heroImageUrl ?? null,
+      status: PastTripStatus.PUBLISHED,
+      publishedAt: now,
+      metaTitle: `${trip.title} · Beyond Borders`,
+      metaDescription: trip.summary,
+    }
+
+    const { id: tripId } = await db.pastTrip.upsert({
+      where: { slug: trip.slug },
+      update: fields,
+      create: { slug: trip.slug, ...fields },
+      select: { id: true },
+    })
+    counts.trips += 1
+
+    // Content the seed owns: replaced wholesale, so removing a highlight here
+    // actually removes it.
+    await db.pastTripLeader.deleteMany({ where: { tripId } })
+    for (const [index, assignment] of trip.leaders.entries()) {
+      const leaderId = leaderIdBySlug.get(assignment.slug)
+      if (leaderId === undefined) {
+        throw new Error(`Past trip "${trip.slug}" references unknown leader "${assignment.slug}".`)
+      }
+
+      await db.pastTripLeader.create({
+        data: { tripId, leaderId, role: assignment.role, sortOrder: index },
+        select: { id: true },
+      })
+      counts.leaders += 1
+    }
+
+    await db.tripHighlight.deleteMany({ where: { tripId } })
+    if (trip.highlights.length > 0) {
+      await db.tripHighlight.createMany({
+        data: trip.highlights.map((highlight, index) => ({
+          tripId,
+          kind: highlight.kind,
+          title: highlight.title,
+          body: highlight.body,
+          dayNumber: highlight.dayNumber ?? null,
+          sortOrder: index,
+        })),
+      })
+      counts.highlights += trip.highlights.length
+    }
+
+    // Gallery rows are matched on url rather than wiped, because a real upload
+    // from a traveller lives in this table beside the seeded ones and must not
+    // be deleted by a seed run.
+    for (const [index, media] of trip.media.entries()) {
+      const existing = await db.tripMedia.findFirst({
+        where: { tripId, url: media.url },
+        select: { id: true },
+      })
+
+      const mediaFields = {
+        alt: media.alt,
+        caption: media.caption ?? null,
+        moderationStatus: ModerationStatus.APPROVED,
+        reviewedAt: now,
+        sortOrder: index,
+      }
+
+      if (existing === null) {
+        await db.tripMedia.create({
+          data: { tripId, url: media.url, ...mediaFields },
+          select: { id: true },
+        })
+      } else {
+        await db.tripMedia.update({
+          where: { id: existing.id },
+          data: mediaFields,
+          select: { id: true },
+        })
+      }
+      counts.media += 1
+    }
+
+    for (const review of trip.reviews) {
+      const email = normalizeEmail(review.reviewerEmail)
+      const userId = userIdByEmail.get(email)
+      if (userId === undefined) {
+        throw new Error(`Past trip "${trip.slug}" references unknown reviewer "${email}".`)
+      }
+
+      // Somebody has to have been on the trip to review it. The seed creates
+      // the participation row rather than bypassing the rule it exists to
+      // enforce — the review endpoint checks this same table.
+      await db.tripParticipant.upsert({
+        where: { tripId_email: { tripId, email } },
+        update: { userId, name: review.displayName ?? email },
+        create: { tripId, userId, name: review.displayName ?? email, email },
+        select: { id: true },
+      })
+      counts.participants += 1
+
+      const reviewFields = {
+        headline: review.headline,
+        body: review.body,
+        displayName: review.displayName ?? null,
+        moderationStatus: ModerationStatus.APPROVED,
+        reviewedAt: now,
+      }
+
+      const { id: reviewId } = await db.tripReview.upsert({
+        where: { tripId_userId: { tripId, userId } },
+        update: reviewFields,
+        create: { tripId, userId, ...reviewFields },
+        select: { id: true },
+      })
+      counts.reviews += 1
+
+      // Replaced rather than merged: a dimension dropped from the seed has to
+      // disappear from the averages, not linger at its last value.
+      await db.tripReviewRating.deleteMany({ where: { reviewId } })
+      const scores = Object.entries(review.ratings) as [ReviewDimension, number][]
+      await db.tripReviewRating.createMany({
+        data: scores.map(([dimension, score]) => ({ reviewId, dimension, score })),
+      })
+      counts.ratings += scores.length
+    }
+  }
+
+  return counts
+}
+
+/**
+ * Promo codes.
+ *
+ * Three, and between them they exercise every branch of the coupon engine: a
+ * capped percentage, a flat amount with a floor, and a code restricted to one
+ * trip. A seed of three identical percentages would leave the cap, the minimum
+ * spend and the package restriction untested by anything anybody clicks.
+ *
+ * Upserted on `code`, which the database requires to be uppercase — the lookup
+ * is an exact match, so a lowercase row would be a code that exists and can
+ * never be redeemed.
+ *
+ * No redemptions are seeded. Those are written by real bookings, and inventing
+ * them would inflate `redeemedCount` against ceilings nobody consumed.
+ */
+async function seedCoupons(): Promise<number> {
+  const now = new Date()
+  const inDays = (days: number): Date => new Date(now.getTime() + days * 86_400_000)
+
+  // Restricted codes need a package. Resolved by slug so a missing trip is an
+  // error here rather than a code that silently applies to everything.
+  const monsoonTarget = await db.travelPackage.findUnique({
+    where: { slug: 'sajek-valley-cloud-chase' },
+    select: { id: true },
+  })
+
+  const coupons = [
+    {
+      code: 'EARLYBIRD',
+      label: 'Early bird — 15% off',
+      description:
+        'Book ahead and take 15% off, up to ৳8,000. One per traveller, and it ends when the ' +
+        'season fills.',
+      type: CouponType.PERCENT,
+      value: 15,
+      // Uncapped, 15% of the Sri Lanka trip would be ৳16,800. A percentage
+      // without a ceiling is a discount whose size depends on which trip
+      // somebody picks, which is not what "15% off" is meant to promise.
+      maxDiscountBdt: 8_000,
+      minSpendBdt: 15_000,
+      startsAt: null,
+      endsAt: inDays(60),
+      maxRedemptions: 200,
+      maxPerUser: 1,
+      packageId: null,
+    },
+    {
+      code: 'GROUPSAVE',
+      label: 'Group saver — ৳5,000 off',
+      description: 'A flat ৳5,000 off bookings over ৳80,000. Best on a party of two or more.',
+      type: CouponType.FIXED,
+      value: 5_000,
+      // A FIXED coupon needs no cap: the value IS the cap. The database
+      // refuses one anyway, so this is not a decision anybody can get wrong.
+      maxDiscountBdt: null,
+      minSpendBdt: 80_000,
+      startsAt: null,
+      endsAt: null,
+      maxRedemptions: null,
+      maxPerUser: 2,
+      packageId: null,
+    },
+    {
+      code: 'MONSOON10',
+      label: 'Monsoon in the hills — 10% off',
+      description: '10% off the Sajek departures, capped at ৳4,000. This one trip only.',
+      type: CouponType.PERCENT,
+      value: 10,
+      maxDiscountBdt: 4_000,
+      minSpendBdt: null,
+      startsAt: null,
+      endsAt: inDays(45),
+      maxRedemptions: 50,
+      maxPerUser: 1,
+      packageId: monsoonTarget?.id ?? null,
+    },
+  ]
+
+  for (const coupon of coupons) {
+    const { code, ...fields } = coupon
+    await db.coupon.upsert({
+      where: { code },
+      // `redeemedCount` is deliberately absent from both branches. It is a
+      // count of real redemptions, and resetting it on a seed run would hand
+      // back ceilings that travellers have already consumed.
+      update: { ...fields, isActive: true },
+      create: { code, ...fields, isActive: true },
+      select: { id: true },
+    })
+  }
+
+  return coupons.length
+}
+
 async function main(): Promise<void> {
   console.log('Seeding Beyond Borders…')
 
@@ -625,23 +1239,67 @@ async function main(): Promise<void> {
   console.log(`  activity tags   ${catalog.activityTags}`)
   console.log(`  opening hours   ${catalog.openingHours}`)
 
+  console.log('\nDiscover')
+  const discover = await seedDiscover()
+  console.log(`  trip leaders    ${discover.leaders}`)
+  console.log(`  packages        ${discover.packages}`)
+  console.log(`  departures      ${discover.departures}`)
+  console.log(`  itinerary days  ${discover.days}`)
+  console.log(`  itinerary items ${discover.items}`)
+  console.log(`  leader roles    ${discover.assignments}`)
+  console.log(`  polls           ${discover.polls} (${discover.pollOptions} options)`)
+
+  console.log('\nPast trips')
+  const past = await seedPastTrips()
+  console.log(`  reviewer accounts ${past.reviewers} created`)
+  console.log(`  trips             ${past.trips}`)
+  console.log(`  leaders           ${past.leaders}`)
+  console.log(`  participants      ${past.participants}`)
+  console.log(`  highlights        ${past.highlights}`)
+  console.log(`  gallery           ${past.media}`)
+  console.log(`  reviews           ${past.reviews} (${past.ratings} dimension scores)`)
+
+  console.log('\nCommerce')
+  console.log(`  coupons         ${await seedCoupons()}`)
+
   // Read the totals back rather than trusting the counters above: the point of
   // the check is to catch a write that did not land.
-  const [tags, destinations, activities, activityTags, openingHours, planRows, settingRows] =
-    await Promise.all([
-      db.tag.count(),
-      db.destination.count(),
-      db.activity.count(),
-      db.activityTag.count(),
-      db.activityOpeningHours.count(),
-      db.plan.count(),
-      db.setting.count(),
-    ])
+  const [
+    tags,
+    destinations,
+    activities,
+    activityTags,
+    openingHours,
+    planRows,
+    settingRows,
+    packageRows,
+    departureRows,
+    leaderRows,
+    pollRows,
+    pollOptionRows,
+  ] = await Promise.all([
+    db.tag.count(),
+    db.destination.count(),
+    db.activity.count(),
+    db.activityTag.count(),
+    db.activityOpeningHours.count(),
+    db.plan.count(),
+    db.setting.count(),
+    db.travelPackage.count(),
+    db.packageDeparture.count(),
+    db.tripLeader.count(),
+    db.poll.count(),
+    db.pollOption.count(),
+  ])
 
   console.log('\nRow counts in the database')
   console.log(
     `  settings=${settingRows} plans=${planRows} tags=${tags} destinations=${destinations} ` +
       `activities=${activities} activity_tags=${activityTags} opening_hours=${openingHours}`
+  )
+  console.log(
+    `  packages=${packageRows} departures=${departureRows} trip_leaders=${leaderRows} ` +
+      `polls=${pollRows} poll_options=${pollOptionRows}`
   )
 
   // Passwords are never printed. Echoing one here would copy a live credential

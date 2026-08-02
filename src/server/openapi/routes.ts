@@ -25,6 +25,22 @@ import {
   TeaserRequest,
 } from '@/server/modules/entitlements/schema'
 import {
+  PackageDetailResponse,
+  PackageListQuery,
+  PackageListResponse,
+  RegisterInterestBody,
+  RegisterInterestResponse,
+} from '@/server/modules/packages/schema'
+import {
+  BookingListResponse,
+  CreateBookingBody,
+  CreateBookingResponse,
+  QuoteBody,
+  QuoteResponse,
+} from '@/server/modules/bookings/schema'
+import { PastTripDetailResponse, PastTripListResponse } from '@/server/modules/past-trips/schema'
+import { ActivePollResponse, CastVoteBody, CastVoteResponse } from '@/server/modules/polls/schema'
+import {
   CheckoutBody,
   CheckoutResponse,
   MockCompletionBody,
@@ -1102,6 +1118,334 @@ registerRoute({
   responses: {
     200: { schema: PaymentListResponse, description: "This traveller's payments." },
     400: errorResponse(MALFORMED_QUERY),
+    401: errorResponse('Authentication is required.'),
+    500: errorResponse(UNEXPECTED),
+  },
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Discover
+//
+// The public trip catalogue and the poll beside it. Everything here is
+// unauthenticated: these are the pages a stranger lands on from a search
+// result, and requiring a token to read them would be requiring one to be
+// indexed.
+//
+// Two of the three write, and neither takes a session. `interest` and `vote`
+// are open on purpose — an account before you may say "I'd come on this" loses
+// exactly the people the list is for — so each carries its own rate limit and
+// its own uniqueness constraint instead. The 429s below are not boilerplate.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const DISCOVER = ['Discover'] as const
+const POLLS = ['Polls'] as const
+
+registerRoute({
+  method: 'get',
+  path: '/api/v1/packages',
+  operationId: 'listPackages',
+  summary: 'The Discover catalogue',
+  description:
+    'Trips designed in advance, as opposed to the ones the planner builds on demand. Only ' +
+    'PUBLISHED rows are ever returned — drafts are absent rather than flagged, so no client has ' +
+    'to remember to filter them.\n\n' +
+    '`scope` is optional and the website omits it: both tabs arrive in one response and the ' +
+    'Domestic/International split happens client-side, so switching tabs costs no request. A ' +
+    'mobile client on a slow connection can ask for one scope instead.\n\n' +
+    'Two counts on each card look alike and are not. `registeredCount` is people on the interest ' +
+    'list; `nextDeparture.seatsTaken` is seats actually held on a dated departure. An interest ' +
+    'is a lead, a seat is a commitment, and they are never added together.',
+  tags: DISCOVER,
+  querySchema: PackageListQuery,
+  responses: {
+    200: { schema: PackageListResponse, description: 'Published packages, in curator order.' },
+    400: errorResponse(MALFORMED_QUERY),
+    500: errorResponse(UNEXPECTED),
+  },
+})
+
+registerRoute({
+  method: 'get',
+  path: '/api/v1/packages/{slug}',
+  operationId: 'getPackage',
+  summary: 'One trip, in full',
+  description:
+    'The day-by-day ships with this response rather than behind a second call: for a package the ' +
+    'itinerary IS the product description. The leaders do too — "who is running this" is a reason ' +
+    'people book a group trip, not a detail they go looking for afterwards.\n\n' +
+    '`departures` covers everything from today onwards, CANCELLED entries included. Somebody who ' +
+    'had that date in mind should see it was cancelled rather than find it quietly missing.\n\n' +
+    'A DRAFT slug answers 404, identically to a slug that does not exist. A trip ops has not ' +
+    'published is not a secret, but it is not an announcement either.',
+  tags: DISCOVER,
+  responses: {
+    200: { schema: PackageDetailResponse, description: 'The trip, its itinerary and its people.' },
+    404: errorResponse('No published trip has this slug.'),
+    500: errorResponse(UNEXPECTED),
+  },
+})
+
+registerRoute({
+  method: 'post',
+  path: '/api/v1/packages/{slug}/interest',
+  operationId: 'registerPackageInterest',
+  summary: 'Join a trip’s interest list',
+  description:
+    'The join list for a trip we have not costed yet, and the enquiry list for one we have. No ' +
+    'account required, deliberately.\n\n' +
+    'Idempotent on (trip, email). Registering twice is a double-click or a correction, not two ' +
+    'travellers — so a repeat call UPDATES the details and answers `created: false`. That matters ' +
+    'because `registeredCount` is printed on a public card, and a duplicate would inflate the ' +
+    'exact number the feature exists to communicate.\n\n' +
+    '`departureId` is validated against THIS trip. A departure id belonging to another package ' +
+    'is a 404 rather than a silently mis-filed lead.\n\n' +
+    'A traveller token is optional. Sending one attaches the account to the row, which is how ops ' +
+    'sees that a lead is already a customer; it does not replace the address they typed.',
+  tags: DISCOVER,
+  requestSchema: RegisterInterestBody,
+  responses: {
+    200: {
+      schema: RegisterInterestResponse,
+      description: 'Registered, or the existing registration updated.',
+    },
+    400: errorResponse(MALFORMED_BODY),
+    404: errorResponse('No published trip has this slug, or that departure is not on it.'),
+    409: errorResponse('That departure has been cancelled or has already run.'),
+    429: errorResponse(
+      'Too many registrations from this network in the last hour. The limit counts resolved edge ' +
+        'addresses; callers whose address cannot be resolved share one pool.'
+    ),
+    500: errorResponse(UNEXPECTED),
+  },
+})
+
+registerRoute({
+  method: 'get',
+  path: '/api/v1/polls/active',
+  operationId: 'getActivePoll',
+  summary: 'The poll running right now, if there is one',
+  description:
+    'Answers `{ poll: null }` rather than 404 when nothing is running: a site with no poll is a ' +
+    'normal state, not a failed request, and the section renders nothing at all in that case.\n\n' +
+    'RESULTS ARE OMITTED, NOT HIDDEN. Until this viewer has voted, every `votes` and `share` is ' +
+    '`null` and `resultsVisible` is false. Shipping the tallies alongside a flag would put them ' +
+    'one devtools tab away, and "results after voting" would be decoration rather than a rule. ' +
+    'Null means withheld; it never means zero.\n\n' +
+    'Results do become visible without voting in two cases: a poll configured to show them up ' +
+    'front, and a poll that has closed — otherwise a finished poll would stay a locked box for ' +
+    'everyone who never got round to it.\n\n' +
+    'Recognition is by visitor cookie alone and creates nothing. A browser we do not recognise ' +
+    'simply reads as "has not voted".',
+  tags: POLLS,
+  responses: {
+    200: { schema: ActivePollResponse, description: 'The open poll, or null.' },
+    500: errorResponse(UNEXPECTED),
+  },
+})
+
+registerRoute({
+  method: 'post',
+  path: '/api/v1/polls/{slug}/vote',
+  operationId: 'castPollVote',
+  summary: 'Vote, once',
+  description:
+    'One vote per voter is a UNIQUE constraint in Postgres, not a check in application code. A ' +
+    'poll whose numbers can be inflated by opening a second tab is a poll whose numbers are ' +
+    'worthless.\n\n' +
+    'A second vote is NOT an error: it answers 200 with `counted: false` and the results, which ' +
+    'is what a returning visitor wanted anyway. So does voting on a poll that closed while the ' +
+    'page was open.\n\n' +
+    'A signed-in caller is identified by their account. Everyone else is identified by the union ' +
+    'of cookie, hashed edge address and `deviceFingerprint` — a hit on any one is the same ' +
+    'person. A caller matching none of the three is refused with 400: a voter with no identity ' +
+    'can vote any number of times.\n\n' +
+    'Signing in after voting anonymously produces a different voter identity, deliberately. The ' +
+    'alternative would refuse a genuine first vote from a new account because a stranger on the ' +
+    'same office router had already voted.',
+  tags: POLLS,
+  requestSchema: CastVoteBody,
+  responses: {
+    200: {
+      schema: CastVoteResponse,
+      description: 'The vote was counted, or had already been cast. Results included either way.',
+    },
+    400: errorResponse(
+      'The body failed validation, or this browser could not be identified well enough to count ' +
+        'a vote.'
+    ),
+    404: errorResponse('No poll has this slug, or that option is not on it.'),
+    429: errorResponse('Too many votes from this network in the last hour.'),
+    500: errorResponse(UNEXPECTED),
+  },
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Past trips
+//
+// The public record of what we have already run. Unauthenticated, like the rest
+// of Discover — these are pages people arrive at from a search result, and the
+// reviews on them are the reason somebody books.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const PAST_TRIPS = ['Past trips'] as const
+
+registerRoute({
+  method: 'get',
+  path: '/api/v1/past-trips',
+  operationId: 'listPastTrips',
+  summary: 'Trips we have already run',
+  description:
+    'Published trips, most recent first — ordered by the date the trip STARTED rather than the ' +
+    'date it was written up, because a trip published six months late is still a trip from six ' +
+    'months ago.\n\n' +
+    '`overallAverage` is the only single figure this API computes, and it exists for the card. It ' +
+    'is a mean of the per-axis means rather than of every score, so an axis two people answered ' +
+    'cannot swing it and an axis everybody answered cannot dominate it. Null until somebody has ' +
+    'reviewed — never 0.\n\n' +
+    '`memberCount` is how many travelled. The participants themselves are never published: naming ' +
+    'fourteen people would put a social graph on a public page that none of them agreed to.',
+  tags: PAST_TRIPS,
+  responses: {
+    200: { schema: PastTripListResponse, description: 'Published trips, newest first.' },
+    500: errorResponse(UNEXPECTED),
+  },
+})
+
+registerRoute({
+  method: 'get',
+  path: '/api/v1/past-trips/{slug}',
+  operationId: 'getPastTrip',
+  summary: 'One trip, as it actually went',
+  description:
+    'The whole record in one response: the story, the highlights, the approved gallery, every ' +
+    'approved review with its own scores, and the per-dimension averages.\n\n' +
+    'HIGHLIGHTS INCLUDE INCIDENTS. `TripHighlightKind.INCIDENT` is the thing that went wrong — the ' +
+    'cancelled ferry, the failed generator, the animal nobody saw — and it is published beside ' +
+    'the sunrise on purpose. A record containing only the good parts is a brochure, and readers ' +
+    'discount brochures entirely.\n\n' +
+    'RATINGS ARE PER AXIS, NOT A STAR. `ratingSummary` carries one entry for each dimension ' +
+    'anybody has rated, with its own average and its own response count, and there is deliberately ' +
+    'no overall score in this response. A trip with superb guiding and poor transport averages to ' +
+    'something unremarkable, and that single number hides the two facts a reader would decide on.\n\n' +
+    'Unapproved photographs and reviews are ABSENT rather than flagged — the filter is a WHERE ' +
+    'clause, not a field a client is trusted to check. A DRAFT slug answers 404, identically to a ' +
+    'slug that does not exist.',
+  tags: PAST_TRIPS,
+  responses: {
+    200: {
+      schema: PastTripDetailResponse,
+      description: 'The trip, its highlights, its gallery and its reviews.',
+    },
+    404: errorResponse('No published trip has this slug.'),
+    500: errorResponse(UNEXPECTED),
+  },
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Booking a departure
+//
+// The commerce half of Discover. A quote is free and anonymous; holding seats
+// needs an account; paying goes through the same checkout every other purchase
+// uses, with `purpose: BOOKING`.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const BOOKINGS = ['Bookings'] as const
+
+const NO_AMOUNT_IN_BODY =
+  'No request body on this endpoint carries an amount, a unit price, a discount or a total. The ' +
+  'client names a departure, a party size and at most a promo code; every figure comes back from ' +
+  'the server, which reads the departure price and the coupon terms itself.'
+
+registerRoute({
+  method: 'post',
+  path: '/api/v1/packages/{slug}/bookings/quote',
+  operationId: 'quoteBooking',
+  summary: 'What would these seats cost?',
+  description:
+    'Prices a party on a departure and applies a promo code if one is sent. Writes nothing — no ' +
+    'booking, no redemption, and no seat held.\n\n' +
+    'A REFUSED CODE STILL RETURNS A PRICE. `couponRefusal` is populated, `coupon` is null and the ' +
+    'total is undiscounted. Answering 400 would blank the price while somebody is halfway through ' +
+    'typing a code; the booking endpoint refuses the same code properly, so nothing can be bought ' +
+    'at the wrong price.\n\n' +
+    'Refusal reasons are a closed vocabulary — UNKNOWN, INACTIVE, NOT_STARTED, EXPIRED, ' +
+    'WRONG_PACKAGE, BELOW_MIN_SPEND, FULLY_REDEEMED, ALREADY_USED. Branch on the reason, not the ' +
+    'message.\n\n' +
+    'No session required. Somebody deciding whether a trip is affordable has not signed in yet — ' +
+    'the per-account redemption ceiling then cannot bind, which is why a code relying on ' +
+    '`maxPerUser` should also carry `maxRedemptions`.\n\n' +
+    NO_AMOUNT_IN_BODY,
+  tags: BOOKINGS,
+  requestSchema: QuoteBody,
+  responses: {
+    200: { schema: QuoteResponse, description: 'The price, and how the code fared.' },
+    400: errorResponse(MALFORMED_BODY),
+    404: errorResponse('No published trip has this slug, or that departure is not on it.'),
+    409: errorResponse(
+      'That departure is cancelled or already run, or the trip has no price set — an ' +
+        'INTEREST_ONLY trip cannot be booked and answers here rather than pretending to quote.'
+    ),
+    500: errorResponse(UNEXPECTED),
+  },
+})
+
+registerRoute({
+  method: 'post',
+  path: '/api/v1/packages/{slug}/bookings',
+  operationId: 'createBooking',
+  summary: 'Hold the seats',
+  description:
+    'Creates a booking in PENDING_PAYMENT and claims its seats immediately, before anybody pays. ' +
+    'Send the returned `bookingId` to POST /api/v1/payments/checkout with `purpose: BOOKING`.\n\n' +
+    'SEATS ARE HELD NOW, NOT AT SETTLEMENT. Claiming on payment would let two travellers both ' +
+    'reach a payment page for the last seat, and one of them would pay for something that no ' +
+    'longer exists. The claim is a single UPDATE whose WHERE clause compares `seatsTaken + n` ' +
+    'against `capacity`, so of two concurrent requests for one seat exactly one succeeds and the ' +
+    'other gets a 409.\n\n' +
+    'Unlike the quote, a promo code that does not apply is a 400 here: charging the full price for ' +
+    'a booking somebody submitted expecting a discount is the one outcome nobody would forgive.\n\n' +
+    'A session IS required, unlike registering interest. This holds inventory and creates ' +
+    'something that will be charged, so it needs an owner — and an anonymous seat hold is free ' +
+    'denial-of-service against a departure.\n\n' +
+    'Every figure comes back in the response: unit price, subtotal, discount and total. Render ' +
+    'those rather than recomputing, so what is shown and what is charged cannot disagree.',
+  tags: BOOKINGS,
+  security: 'user',
+  requestSchema: CreateBookingBody,
+  responses: {
+    201: { schema: CreateBookingResponse, description: 'Seats held. Nothing is paid yet.' },
+    400: errorResponse(
+      'The body failed validation, or the promo code sent does not apply — `details[].path` is ' +
+        '`couponCode` and the message names the reason.'
+    ),
+    401: errorResponse('Authentication is required.'),
+    404: errorResponse('No published trip has this slug, or that departure is not on it.'),
+    409: errorResponse(
+      'Not enough seats left for that party, or the departure is cancelled, already run, or ' +
+        'uncosted.'
+    ),
+    429: errorResponse('Too many bookings started from this account in the last hour.'),
+    500: errorResponse(UNEXPECTED),
+  },
+})
+
+registerRoute({
+  method: 'get',
+  path: '/api/v1/me/bookings',
+  operationId: 'listMyBookings',
+  summary: 'The traveller’s own bookings',
+  description:
+    'Newest first. There is no parameter for whose bookings to list: the user id comes from the ' +
+    'token and goes straight into the query.\n\n' +
+    'Every booking carries the figures it was MADE with rather than today’s price. A departure ' +
+    'repriced next week does not restate a receipt, and an expired coupon does not retroactively ' +
+    'raise a total.\n\n' +
+    '`bookedAt` and `confirmedAt` are two different dates: when the seats were held, and when the ' +
+    'money landed. The second is null while a booking is still awaiting payment.',
+  tags: BOOKINGS,
+  security: 'user',
+  responses: {
+    200: { schema: BookingListResponse, description: 'This traveller’s bookings.' },
     401: errorResponse('Authentication is required.'),
     500: errorResponse(UNEXPECTED),
   },

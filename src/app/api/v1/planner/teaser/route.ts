@@ -1,7 +1,10 @@
 import { cookies } from 'next/headers'
 import type { NextRequest } from 'next/server'
+import { AiCallOutcome, AiSurface } from '@/generated/prisma/enums'
 import { env } from '@/lib/env'
+import { resolveModelSelection, schemaConstrainedModel } from '@/server/ai/provider'
 import type { TeaserQuestionnaire } from '@/server/ai/schemas'
+import { recordAiUsage } from '@/server/ai/usage-log'
 import { clientContext, optionalUser } from '@/server/http/guards'
 import { json, route } from '@/server/http/handler'
 import { consumeRateLimit, enforceRateLimit } from '@/server/http/rate-limit'
@@ -178,9 +181,26 @@ export const POST = route(async (req: NextRequest) => {
     await recordUsage(claims.userId, { aiPromptsUsed: 1 })
   }
 
+  // Who the spend belongs to, resolved once. At most one of these is ever set:
+  // a signed-in caller never touches the visitor machinery above.
+  const attribution = { userId: claims?.userId ?? null, anonymousVisitorId: visitorId }
+
   try {
     const cached = await readTeaserCache(answers)
     if (cached !== null) {
+      // Recorded even though nothing was spent — especially because nothing was
+      // spent. "How many previews did the cache serve" is the number that
+      // justifies the cache, and it cannot be recovered later from rows that
+      // were never written. The selection is resolved for the sake of the
+      // column, not to call anything: it records which model WOULD have run.
+      recordAiUsage({
+        surface: AiSurface.TEASER,
+        outcome: AiCallOutcome.SUCCEEDED,
+        selection: await resolveModelSelection(schemaConstrainedModel()),
+        cached: true,
+        ...attribution,
+      })
+
       const reply: TeaserReply = { teaser: cached, cached: true, promptsRemaining }
       return json(reply)
     }
@@ -188,12 +208,28 @@ export const POST = route(async (req: NextRequest) => {
     // Checked here rather than at the top: with the switch off we still serve
     // the cache, because that costs nothing. The switch exists to stop spend,
     // not to take the product away.
-    if (!(await teaserEnabled())) throw teaserDisabled()
+    if (!(await teaserEnabled())) {
+      recordAiUsage({
+        surface: AiSurface.TEASER,
+        outcome: AiCallOutcome.REFUSED,
+        selection: await resolveModelSelection(schemaConstrainedModel()),
+        errorKind: 'TeaserDisabled',
+        ...attribution,
+      })
+      throw teaserDisabled()
+    }
 
     // The day's ceiling, consumed only now — past the cache, so it counts model
     // calls and not replies. Everything above this line is free.
     const ceiling = await consumeRateLimit(TEASER_DAILY_GENERATION_RULE)
     if (!ceiling.allowed) {
+      recordAiUsage({
+        surface: AiSurface.TEASER,
+        outcome: AiCallOutcome.REFUSED,
+        selection: await resolveModelSelection(schemaConstrainedModel()),
+        errorKind: 'DailyCeilingReached',
+        ...attribution,
+      })
       // Logged, and logged loudly, because this firing is never routine. Either
       // the site is more popular than the number assumed, or something is
       // generating previews that should have been cached — and the two look
@@ -206,7 +242,7 @@ export const POST = route(async (req: NextRequest) => {
       throw tooManyRequests(teaserCeilingReached())
     }
 
-    const teaser = await generateTeaser(answers)
+    const teaser = await generateTeaser(answers, attribution)
     await writeTeaserCache(answers, teaser)
 
     const reply: TeaserReply = { teaser, cached: false, promptsRemaining }

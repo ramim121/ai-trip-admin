@@ -1,7 +1,7 @@
 import { stepCountIs, streamText, tool, type ModelMessage } from 'ai'
 import { z } from 'zod'
 import type { Prisma } from '@/generated/prisma/client'
-import { PlannerMessageRole } from '@/generated/prisma/enums'
+import { AiCallOutcome, AiSurface, PlannerMessageRole } from '@/generated/prisma/enums'
 import { db } from '@/lib/db'
 import {
   AiLimitError,
@@ -27,6 +27,7 @@ import {
   type TripBrief,
 } from '@/server/ai/schemas'
 import { buildUsageRecord, describeUsage, toPlannerMessageFields } from '@/server/ai/usage'
+import { errorKindOf, recordAiUsage } from '@/server/ai/usage-log'
 import { badRequest } from '@/server/http/errors'
 import { catalogTools } from '@/server/modules/catalog/tools'
 import {
@@ -333,6 +334,15 @@ export async function streamPlannerTurn(input: PlannerTurnInput): Promise<Respon
 
       let usage: Awaited<ReturnType<typeof collectUsage>> = null
       let finishReason: string | undefined
+      /**
+       * The class of whatever ended the turn early, or null if nothing did.
+       *
+       * Kept separate from the `error` frame because the two answer different
+       * questions: the frame tells the traveller their reply stopped, this tells
+       * ops the provider was called and billed anyway. A turn that timed out at
+       * forty-five seconds cost real tokens.
+       */
+      let failureKind: string | null = null
       const startedAt = Date.now()
 
       try {
@@ -405,6 +415,8 @@ export async function streamPlannerTurn(input: PlannerTurnInput): Promise<Respon
           }
         }, limits.wallClockMs)
       } catch (e) {
+        failureKind = errorKindOf(e)
+
         if (e instanceof AiLimitError) {
           send({ type: 'limit', reason: e.reason, message: e.message })
         } else {
@@ -433,6 +445,27 @@ export async function streamPlannerTurn(input: PlannerTurnInput): Promise<Respon
         })
 
         console.log(describeUsage(record))
+
+        // The spend row. Written even on the failure path — a turn that
+        // streamed for forty seconds and then timed out is not free, and an
+        // absent row would make the console's totals quietly understate the
+        // bill by exactly the calls that went wrong.
+        //
+        // On that path `usage` is null, because the SDK's total never resolves
+        // for a stream that broke. The row therefore carries null token counts
+        // rather than zeros: we know it cost something and we do not know how
+        // much, and those are different claims.
+        recordAiUsage({
+          surface: AiSurface.PLANNER,
+          outcome: failureKind === null ? AiCallOutcome.SUCCEEDED : AiCallOutcome.FAILED,
+          selection: active,
+          usage,
+          latencyMs: record.latencyMs,
+          errorKind: failureKind,
+          userId: session.userId,
+          anonymousVisitorId: session.anonymousVisitorId,
+          plannerSessionId: session.id,
+        })
 
         const toolCalls: Prisma.InputJsonValue = {
           tools: toolNames,

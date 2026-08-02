@@ -71,6 +71,26 @@ model User {
   /// Anonymous visitors that later became this account.
   convertedFrom    AnonymousVisitor[]
 
+  /// Detached rather than cascaded — see each model for why. Spend survives a
+  /// deleted account, a poll's totals must not silently drop, and an interest
+  /// list ops is working from is not the account's to erase.
+  aiUsageEvents    AiUsageEvent[]
+  pollVotes        PollVote[]
+  packageInterests PackageInterest[]
+
+  /// Past trips. `tripReviews` cascades — an account's opinions go with it —
+  /// while participation and uploaded photographs detach: the trip still ran
+  /// with that many people, and an approved gallery photo is the trip's record
+  /// rather than the uploader's property.
+  tripParticipations TripParticipant[]
+  tripReviews        TripReview[]
+  tripMedia          TripMedia[]
+
+  /// Commerce. Both detach rather than cascade: a booking is a financial record
+  /// and a redemption is the evidence a coupon ceiling was consumed.
+  bookings          PackageBooking[]
+  couponRedemptions CouponRedemption[]
+
   @@index([status])
   @@index([createdAt])
   @@map("users")
@@ -94,6 +114,11 @@ model AdminUser {
   refreshTokens AdminRefreshToken[]
   auditLogs     AuditLog[]
   settings      Setting[]
+
+  /// What this staff member let onto the public site. Named relations because
+  /// AdminUser is referenced twice from two different moderation queues.
+  moderatedMedia   TripMedia[]  @relation("TripMediaModerator")
+  moderatedReviews TripReview[] @relation("TripReviewModerator")
 
   @@index([role])
   @@index([status])
@@ -366,7 +391,7 @@ model Plan {
   /// its 3-saved ceiling bounds what it can KEEP — has nothing at all bounding
   /// what it can ASK, and every planner turn is a paid model call. `null` means
   /// unmetered and is reserved for tiers we are happy to leave uncapped.
-  aiPromptsPerPeriod   Int?
+  aiPromptsPerPeriod Int?
 
   isActive  Boolean @default(true)
   sortOrder Int     @default(0)
@@ -501,6 +526,17 @@ model Payment {
   planId String? @db.Uuid
   plan   Plan?   @relation(fields: [planId], references: [id], onDelete: Restrict)
 
+  /// Set for `purpose = BOOKING`, and the reason that purpose is no longer
+  /// inert. Restrict, like the plan: a booking with a settled payment against
+  /// it is a trip somebody paid for.
+  ///
+  /// The comment above this block used to say both targets were null for a
+  /// BOOKING because ops settled those by hand against a quote. That is still
+  /// true of a quote-driven booking; a package departure bought through
+  /// self-service checkout points here instead.
+  bookingId String?         @db.Uuid
+  booking   PackageBooking? @relation(fields: [bookingId], references: [id], onDelete: Restrict)
+
   amountBdt Int
   status    PaymentStatus @default(INITIATED)
 
@@ -589,6 +625,8 @@ model AnonymousVisitor {
   convertedUser   User?   @relation(fields: [convertedUserId], references: [id], onDelete: SetNull)
 
   plannerSessions PlannerSession[]
+  aiUsageEvents   AiUsageEvent[]
+  pollVotes       PollVote[]
 
   /// Non-unique by design: many visitors share an IP (NAT, mobile carriers) and
   /// many share a fingerprint (same phone model, same browser). These are
@@ -720,6 +758,7 @@ model Destination {
 
   activities  Activity[]
   itineraries Itinerary[]
+  packages    TravelPackage[]
 
   @@index([isActive, sortOrder])
   @@index([country])
@@ -891,8 +930,9 @@ model PlannerSession {
   createdAt     DateTime @default(now())
   lastMessageAt DateTime @default(now())
 
-  messages    PlannerMessage[]
-  itineraries Itinerary[]
+  messages      PlannerMessage[]
+  itineraries   Itinerary[]
+  aiUsageEvents AiUsageEvent[]
 
   @@index([userId])
   @@index([anonymousVisitorId])
@@ -1039,8 +1079,8 @@ model Itinerary {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  days    ItineraryDay[]
-  unlocks ItineraryUnlock[]
+  days     ItineraryDay[]
+  unlocks  ItineraryUnlock[]
   /// Checkouts opened against this trip. Distinct from `unlocks`: a payment
   /// that failed or was abandoned appears here and never there.
   payments Payment[]
@@ -1131,4 +1171,1060 @@ model ItineraryBlock {
   @@index([activityId])
   @@index([transitFromBlockId])
   @@map("itinerary_blocks")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AI spend
+//
+// One row per model call, written by every surface that talks to a provider.
+//
+// It exists because nothing else could answer "what did we spend, on which
+// model". PlannerMessage carries `model` and token counts, but only for the
+// planner, and only for calls that produced a message — a teaser, a refusal, a
+// provider timeout and a cache hit all leave no trace there at all. A console
+// built on that table would have reported the cheap model as free and an
+// outage as quiet.
+//
+// Deliberately append-only and never updated. It is a spend log; a row that can
+// be edited is a row that cannot be reconciled against an invoice.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Which product surface made the call. The unit ops budgets by.
+enum AiSurface {
+  /// The one free preview an anonymous visitor gets.
+  TEASER
+  /// A conversational planner turn.
+  PLANNER
+  /// Rebuilding a single day of an existing itinerary.
+  DAY_REGENERATION
+  /// Ranking or suggesting catalog activities.
+  SUGGESTION
+}
+
+enum AiCallOutcome {
+  SUCCEEDED
+  /// Reached the provider and came back wrong: a timeout, a 5xx, a schema miss.
+  FAILED
+  /// Never reached the provider. A quota wall, a kill switch, a cache hit.
+  /// Costs nothing, and is recorded precisely so the money saved is visible.
+  REFUSED
+}
+
+model AiUsageEvent {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  surface AiSurface
+  outcome AiCallOutcome
+
+  /// Recorded as free text rather than an enum. Model names are a vendor's
+  /// vocabulary, not ours — `gemini-flash-latest` resolves to something new
+  /// whenever Google says so — and a migration per model rename would make the
+  /// spend log the thing blocking a model swap.
+  provider String
+  model    String
+
+  /// Where the selection came from: `env`, `setting` or `explicit`. Ops needs
+  /// to see at a glance whether a console override is actually in force.
+  modelSource String
+
+  /// True when the reply came from TeaserCache and no provider was called.
+  /// The row is still written: "how often did the cache save us a call" is the
+  /// question that justifies the cache, and it cannot be answered by rows that
+  /// were never written.
+  cached Boolean @default(false)
+
+  /// Null whenever the provider did not report them — a failure, a refusal, or
+  /// a stream that aborted. Null is not zero, and averaging over it as zero
+  /// would understate cost exactly when something is going wrong.
+  promptTokens     Int?
+  completionTokens Int?
+  totalTokens      Int?
+
+  /// Wall clock for the call, including retries inside the SDK.
+  latencyMs Int?
+
+  /// `AbortError`, `AI_APICallError`, and so on. The class of failure, never
+  /// the message: provider messages can quote the prompt back, and this table
+  /// is read by staff who have no business reading a traveller's words.
+  errorKind String?
+
+  /// SetNull on all three: a deleted account or an expired session must not
+  /// erase what was spent on it.
+  userId String? @db.Uuid
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  anonymousVisitorId String?           @db.Uuid
+  anonymousVisitor   AnonymousVisitor? @relation(fields: [anonymousVisitorId], references: [id], onDelete: SetNull)
+
+  plannerSessionId String?         @db.Uuid
+  plannerSession   PlannerSession? @relation(fields: [plannerSessionId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  /// The console's questions, in index form: what happened lately, what did
+  /// each model cost, which surface is spending, and who.
+  @@index([createdAt])
+  @@index([model, createdAt])
+  @@index([surface, createdAt])
+  @@index([userId, createdAt])
+  @@map("ai_usage_events")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Packages
+//
+// The Discover catalogue: trips ops has already designed, as opposed to the
+// ones the planner builds on demand. Two axes decide how one is sold and both
+// are columns rather than conventions, because the website branches on them:
+//
+//   scope       DOMESTIC or INTERNATIONAL — the two tabs on /discover.
+//   pricingMode FIXED_PRICE, which quotes a number, or INTEREST_ONLY, which
+//               collects a list of people who would come if it ran.
+//
+// An INTEREST_ONLY package with a price is a contradiction, and the migration
+// adds a CHECK that says so.
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum PackageScope {
+  DOMESTIC
+  INTERNATIONAL
+}
+
+enum PackageKind {
+  /// Fixed departures, a shared group, a leader assigned.
+  GROUP
+  /// Run for one party, on dates they choose.
+  INDIVIDUAL
+}
+
+enum PackagePricingMode {
+  /// `priceFromBdt` is a real number somebody may book against.
+  FIXED_PRICE
+  /// Not costed yet. The public page collects interest instead of a booking.
+  INTEREST_ONLY
+}
+
+enum PackageStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum DepartureStatus {
+  SCHEDULED
+  /// Enough seats sold that it runs whatever happens next.
+  GUARANTEED
+  SOLD_OUT
+  CANCELLED
+  COMPLETED
+}
+
+enum TripLeaderRole {
+  /// Runs the trip on the ground.
+  LEADER
+  /// Owns it commercially; the name on the quote.
+  MANAGER
+  /// Local specialist for part of it.
+  GUIDE
+}
+
+enum PackageInterestStatus {
+  NEW
+  CONTACTED
+  CONVERTED
+  WITHDRAWN
+}
+
+model TravelPackage {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  slug  String @unique
+  title String
+
+  /// One or two lines for the card. `description` is the page.
+  summary     String
+  description String
+
+  scope       PackageScope
+  kind        PackageKind
+  pricingMode PackagePricingMode
+
+  /// Optional link to the catalog, so a package can point at the destination
+  /// whose activities the planner already knows. SetNull, never Cascade:
+  /// retiring a destination must not delete a package people have booked.
+  destinationId String?      @db.Uuid
+  destination   Destination? @relation(fields: [destinationId], references: [id], onDelete: SetNull)
+
+  /// What the card prints. Kept even when `destinationId` is null, exactly as
+  /// on Itinerary: "Sylhet & Srimangal" is a real trip with no single row.
+  destinationLabel String
+  country          String
+
+  durationDays   Int
+  durationNights Int
+
+  /// Whole taka, per person, and NULL for INTEREST_ONLY — not zero. Zero is a
+  /// free trip, which is a thing we could run and therefore must stay
+  /// distinguishable from "no price yet".
+  priceFromBdt Int?
+  /// Set only when the price genuinely is a range across departures or room
+  /// grades. Null means `priceFromBdt` is the price.
+  priceToBdt   Int?
+
+  /// GROUP only. The band the trip runs in, shown on the card as "8–14
+  /// travellers" so nobody has to open the page to learn it is a small group.
+  groupSizeMin Int?
+  groupSizeMax Int?
+
+  heroImageUrl String?
+  cardImageUrl String?
+
+  /// Short bullets. Postgres arrays rather than tables: they are ordered
+  /// display strings with no identity of their own, nothing joins to them, and
+  /// a three-table write to save a bullet point is a worse trade than
+  /// rewriting the whole array.
+  highlights String[]
+  inclusions String[]
+  exclusions String[]
+
+  status      PackageStatus @default(DRAFT)
+  publishedAt DateTime?
+  sortOrder   Int           @default(0)
+
+  metaTitle       String?
+  metaDescription String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  departures PackageDeparture[]
+  days       PackageItineraryDay[]
+  leaders    PackageLeader[]
+  interests  PackageInterest[]
+  /// Times this package has actually run and been written up.
+  pastTrips  PastTrip[]
+  bookings   PackageBooking[]
+  /// Codes restricted to this trip. A code with no package works on any of them.
+  coupons    Coupon[]
+
+  /// The public list query: published rows of one scope, in curator order.
+  @@index([status, scope, sortOrder])
+  @@index([destinationId])
+  @@map("travel_packages")
+}
+
+/// One dated running of a package. This is what a traveller actually joins.
+model PackageDeparture {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  packageId String        @db.Uuid
+  package   TravelPackage @relation(fields: [packageId], references: [id], onDelete: Cascade)
+
+  startDate DateTime @db.Date
+  endDate   DateTime @db.Date
+
+  capacity   Int
+  /// Held seats. Never derived from a count of interests — an interest is not a
+  /// seat, and conflating the two would let a waiting list close a departure.
+  seatsTaken Int @default(0)
+
+  /// Overrides the package price for this departure. Peak dates cost more, and
+  /// a second price column beats editing the package twice a year.
+  priceBdt Int?
+
+  status DepartureStatus @default(SCHEDULED)
+
+  notes String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  interests PackageInterest[]
+  pastTrips PastTrip[]
+  bookings  PackageBooking[]
+
+  /// One departure per package per start date. A duplicate is a data-entry
+  /// slip, and two rows for one trip split its seat count in half.
+  @@unique([packageId, startDate])
+  @@index([startDate, status])
+  @@map("package_departures")
+}
+
+/// A day of the published itinerary. Shown in full on the public page — the
+/// day-by-day IS the product description for a package.
+model PackageItineraryDay {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  packageId String        @db.Uuid
+  package   TravelPackage @relation(fields: [packageId], references: [id], onDelete: Cascade)
+
+  /// 1-based, like ItineraryDay. Day 1 is the first day, not an index.
+  dayNumber Int
+
+  title   String
+  summary String?
+
+  /// Where they sleep that night. Null on the last day, when they do not.
+  accommodation String?
+
+  /// "Breakfast", "Dinner". An array, because the answer is a list and the
+  /// question is never "which meal row is this".
+  meals String[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items PackageItineraryItem[]
+
+  @@unique([packageId, dayNumber])
+  @@map("package_itinerary_days")
+}
+
+/// A line within a published day.
+model PackageItineraryItem {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  dayId String              @db.Uuid
+  day   PackageItineraryDay @relation(fields: [dayId], references: [id], onDelete: Cascade)
+
+  /// Reuses the planner's vocabulary rather than inventing a second one, so a
+  /// package day and a generated day can render through the same component.
+  kind ItineraryBlockKind @default(ACTIVITY)
+
+  title  String
+  detail String?
+
+  /// Minutes from local midnight, the same convention as ItineraryBlock, and
+  /// nullable here because a published itinerary is often deliberately vague:
+  /// "afternoon at leisure" has no start time and must not be given a fake one.
+  startMinute     Int?
+  durationMinutes Int?
+
+  position Int @default(0)
+
+  @@index([dayId, position])
+  @@map("package_itinerary_items")
+}
+
+/// Staff who run trips. A table of people rather than three text columns on a
+/// package, because the same guide leads eleven trips and their photo should
+/// not be uploaded eleven times.
+model TripLeader {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  slug String @unique
+  name String
+
+  /// Their usual role. A package may override it — the person who leads most
+  /// trips occasionally goes along as the local guide.
+  role TripLeaderRole @default(LEADER)
+
+  /// One line under the name. "Twelve years in the Sundarbans."
+  headline String
+  bio      String
+
+  photoUrl String?
+
+  yearsExperience Int?
+  /// Curated, not counted: it includes the years before this system existed.
+  tripsLed        Int  @default(0)
+
+  languages String[]
+
+  isActive  Boolean @default(true)
+  sortOrder Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  packages  PackageLeader[]
+  /// Trips they actually led, as opposed to packages they are assigned to.
+  pastTrips PastTripLeader[]
+
+  @@index([isActive, sortOrder])
+  @@map("trip_leaders")
+}
+
+model PackageLeader {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  packageId String        @db.Uuid
+  package   TravelPackage @relation(fields: [packageId], references: [id], onDelete: Cascade)
+
+  leaderId String     @db.Uuid
+  leader   TripLeader @relation(fields: [leaderId], references: [id], onDelete: Cascade)
+
+  /// Overrides TripLeader.role for this trip only.
+  role TripLeaderRole
+
+  /// The name on the card. At most one per package, enforced by a partial
+  /// unique index in the migration — Prisma cannot express one.
+  isPrimary Boolean @default(false)
+
+  sortOrder Int @default(0)
+
+  @@unique([packageId, leaderId])
+  @@index([leaderId])
+  @@map("package_leaders")
+}
+
+/// "I would come on this." The join list for an INTEREST_ONLY package, and the
+/// enquiry list for a priced one.
+model PackageInterest {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  packageId String        @db.Uuid
+  package   TravelPackage @relation(fields: [packageId], references: [id], onDelete: Cascade)
+
+  /// Which running of it, when they picked one.
+  departureId String?           @db.Uuid
+  departure   PackageDeparture? @relation(fields: [departureId], references: [id], onDelete: SetNull)
+
+  /// Set when they were signed in. Null for a visitor who left an address.
+  userId String? @db.Uuid
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  name  String
+  /// Lowercased and trimmed before write, like User.email, since the unique
+  /// index below is case-sensitive and "Ana@x.com" must not register twice.
+  email String
+  phone String?
+
+  partySize Int     @default(1)
+  message   String?
+
+  status PackageInterestStatus @default(NEW)
+
+  /// Set when ops last spoke to them. Ordering the console by this is how a
+  /// list of leads stops being a list of names.
+  contactedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// One registration per address per package. Registering twice is a
+  /// double-click, not two travellers — and the public card prints this count,
+  /// so a duplicate would inflate the number the whole feature is selling.
+  @@unique([packageId, email])
+  @@index([packageId, status])
+  @@index([departureId])
+  @@map("package_interests")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Polls
+//
+// "Where should we go next?" on the Discover page. Results are hidden until
+// somebody votes, which is the product rule and also the anti-herding one.
+//
+// One vote per voter per poll is a UNIQUE constraint, not a check in a service.
+// A poll whose numbers can be inflated by opening a second tab is a poll whose
+// numbers are worthless, and the only place that guarantee can live is the
+// database.
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum PollStatus {
+  DRAFT
+  OPEN
+  CLOSED
+}
+
+model Poll {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  slug     String @unique
+  question String
+
+  description String?
+
+  status PollStatus @default(DRAFT)
+
+  /// A window, so a poll can be scheduled and can close itself. Both null means
+  /// "open until somebody closes it".
+  opensAt  DateTime?
+  closesAt DateTime?
+
+  /// Off by default: seeing the leader before choosing changes the choice.
+  showResultsBeforeVote Boolean @default(false)
+
+  sortOrder Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  options PollOption[]
+  votes   PollVote[]
+
+  @@index([status, sortOrder])
+  @@map("polls")
+}
+
+model PollOption {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  pollId String @db.Uuid
+  poll   Poll   @relation(fields: [pollId], references: [id], onDelete: Cascade)
+
+  label    String
+  subtitle String?
+  imageUrl String?
+
+  sortOrder Int @default(0)
+
+  /// Denormalised so a results read is one row per option rather than a
+  /// group-by over every vote ever cast. Incremented in the same transaction as
+  /// the vote, so it cannot drift; PollVote remains the record of truth and the
+  /// console can recount from it.
+  voteCount Int @default(0)
+
+  createdAt DateTime @default(now())
+
+  votes PollVote[]
+
+  /// Exists only to be referenced by a composite foreign key.
+  ///
+  /// `id` is already unique on its own, so this adds no restriction. What it
+  /// adds is a target: `poll_votes` carries a FK on (optionId, pollId) pointing
+  /// here, which is what stops a vote naming poll A and option B. Postgres
+  /// requires the referenced columns to be unique together, and Prisma cannot
+  /// express the composite FK itself — so the constraint lives in the migration
+  /// and this line is here to stop `migrate dev` proposing to drop the index
+  /// underneath it.
+  @@unique([id, pollId])
+  @@index([pollId, sortOrder])
+  @@map("poll_options")
+}
+
+model PollVote {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  pollId String @db.Uuid
+  poll   Poll   @relation(fields: [pollId], references: [id], onDelete: Cascade)
+
+  optionId String     @db.Uuid
+  option   PollOption @relation(fields: [optionId], references: [id], onDelete: Cascade)
+
+  userId String? @db.Uuid
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  anonymousVisitorId String?           @db.Uuid
+  anonymousVisitor   AnonymousVisitor? @relation(fields: [anonymousVisitorId], references: [id], onDelete: SetNull)
+
+  /// The identity this vote is deduplicated on: `u:<userId>` for an account,
+  /// `v:<visitorId>` for a recognised visitor, `ip:<salted digest>` otherwise.
+  ///
+  /// A derived column rather than a pair of nullable FKs, because the
+  /// constraint has to hold across all three cases at once and Postgres cannot
+  /// make one unique index span "whichever of these is set". Signing in after
+  /// voting anonymously is therefore two different keys — deliberately: the
+  /// alternative is refusing a genuine first vote from an account because a
+  /// stranger on the same office router already voted.
+  voterKey String
+
+  createdAt DateTime @default(now())
+
+  /// The guarantee. Nothing above this line is trusted to enforce it.
+  @@unique([pollId, voterKey])
+  @@index([optionId])
+  @@map("poll_votes")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Past trips
+//
+// The trips we have already run, published as a public record.
+//
+// A PastTrip is NOT a TravelPackage. A package is a thing we sell — it may have
+// run twenty times or never. A past trip is one specific running of one, with
+// the people who were actually on it, what actually happened, and what they
+// thought of it afterwards. `packageId` links the two where a link exists, and
+// is nullable because the earliest trips predate the catalogue.
+//
+// WHAT MAKES THIS WORTH PUBLISHING RATHER THAN A GALLERY
+//
+// Two things, and both are deliberate discomfort:
+//
+//   INCIDENTS. `TripHighlight.kind` includes INCIDENT alongside MOMENT, so the
+//   ferry that was cancelled and the day it rained through appear beside the
+//   sunrise. A page that records only the good parts is a brochure, and readers
+//   discount brochures entirely.
+//
+//   RATINGS ON SEVEN AXES, not one star. A trip can have superb guiding and bad
+//   food, and a single number averages that into "4.1" — a figure that tells
+//   nobody whether to book. One row per dimension per review is the only shape
+//   that keeps the two facts apart.
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum PastTripStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum TripHighlightKind {
+  /// The thing people will tell their friends about.
+  MOMENT
+  /// The thing that went wrong. Published on purpose — see the block comment.
+  INCIDENT
+  /// A first, a summit, a record. Something the group achieved.
+  MILESTONE
+}
+
+/// What a review scores. Adding a value here is a migration and a deliberate
+/// act: every historical review is then silently missing the new axis, and an
+/// average computed across a dimension most reviews never saw is a lie with a
+/// decimal point in it.
+enum ReviewDimension {
+  ORGANISATION
+  ACCOMMODATION
+  FOOD
+  TRANSPORT
+  VALUE_FOR_MONEY
+  TRIP_LEADER
+  ACTIVITIES
+}
+
+/// Anything a traveller submitted starts here and stays invisible until a human
+/// says otherwise. There is no fourth state and no auto-approve flag.
+enum ModerationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model PastTrip {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  slug  String @unique
+  title String
+
+  /// One or two lines for the card.
+  summary String
+
+  /// The long account of how it went. Written by whoever led it.
+  story String
+
+  /// The package this was a running of, where there is one. SetNull rather than
+  /// Cascade: retiring a package must not delete the record of the trips that
+  /// actually happened under it.
+  packageId String?        @db.Uuid
+  package   TravelPackage? @relation(fields: [packageId], references: [id], onDelete: SetNull)
+
+  /// The exact departure, while we still have the row. Also SetNull.
+  departureId String?           @db.Uuid
+  departure   PackageDeparture? @relation(fields: [departureId], references: [id], onDelete: SetNull)
+
+  /// Denormalised from the package so a trip whose package was deleted still
+  /// says where it went, and so the card needs no join.
+  destinationLabel String
+  country          String
+  scope            PackageScope
+
+  startDate DateTime @db.Date
+  endDate   DateTime @db.Date
+
+  /// How many people travelled. A curated total, not a count of rows: most
+  /// travellers never made an account, and a figure derived from
+  /// `participants` would under-report every trip by most of its group.
+  memberCount Int
+
+  heroImageUrl String?
+
+  status      PastTripStatus @default(DRAFT)
+  publishedAt DateTime?
+  sortOrder   Int            @default(0)
+
+  metaTitle       String?
+  metaDescription String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  leaders      PastTripLeader[]
+  participants TripParticipant[]
+  highlights   TripHighlight[]
+  media        TripMedia[]
+  reviews      TripReview[]
+
+  /// The public list: published trips, most recent first.
+  @@index([status, startDate])
+  @@index([packageId])
+  @@map("past_trips")
+}
+
+/// Who ran it. Separate from PackageLeader because the person who led a trip in
+/// March is not necessarily the one assigned to the package today.
+model PastTripLeader {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  tripId String   @db.Uuid
+  trip   PastTrip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+
+  leaderId String     @db.Uuid
+  leader   TripLeader @relation(fields: [leaderId], references: [id], onDelete: Cascade)
+
+  role TripLeaderRole
+
+  sortOrder Int @default(0)
+
+  @@unique([tripId, leaderId])
+  @@index([leaderId])
+  @@map("past_trip_leaders")
+}
+
+/// Somebody who was on the trip.
+///
+/// This table exists to answer exactly one question: may this account leave a
+/// review? Reviews are restricted to people who went, and "went" has to be a
+/// row somewhere or the restriction is a comment. Rows are created by ops from
+/// the booking list, never by a traveller claiming to have been there.
+model TripParticipant {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  tripId String   @db.Uuid
+  trip   PastTrip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+
+  /// Set once we can match them to an account. Null for a traveller who never
+  /// made one — they still travelled, they just cannot review.
+  userId String? @db.Uuid
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  name  String
+  /// Lowercased and trimmed, like every other email column here.
+  email String
+
+  createdAt DateTime @default(now())
+
+  /// One row per person per trip. Also what makes the review gate a single
+  /// indexed lookup rather than a scan.
+  @@unique([tripId, email])
+  @@index([userId])
+  @@map("trip_participants")
+}
+
+model TripHighlight {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  tripId String   @db.Uuid
+  trip   PastTrip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+
+  kind TripHighlightKind
+
+  title String
+  body  String
+
+  /// Which day it happened on, when that is known. Null for something that ran
+  /// through the whole trip.
+  dayNumber Int?
+
+  sortOrder Int @default(0)
+
+  createdAt DateTime @default(now())
+
+  @@index([tripId, sortOrder])
+  @@map("trip_highlights")
+}
+
+/// A photograph in a trip's gallery.
+///
+/// Uploaded by travellers or by staff, and INVISIBLE until approved. The
+/// default is PENDING and no code path sets APPROVED without an admin id beside
+/// it — a public gallery anyone can write to is a public gallery somebody
+/// eventually writes something unpleasant into.
+model TripMedia {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  tripId String   @db.Uuid
+  trip   PastTrip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+
+  url     String
+  /// Never empty on an approved row: alt text is not optional on a public page.
+  alt     String
+  caption String?
+
+  /// Who sent it. Null for staff uploads and for a deleted account — the photo
+  /// survives, the attribution does not.
+  uploadedByUserId String? @db.Uuid
+  uploadedByUser   User?   @relation(fields: [uploadedByUserId], references: [id], onDelete: SetNull)
+
+  moderationStatus ModerationStatus @default(PENDING)
+
+  /// Who decided, and when. Kept for the same reason a payment keeps its
+  /// verifier: "why is this on the site" needs an answer with a name in it.
+  reviewedByAdminId String?    @db.Uuid
+  reviewedByAdmin   AdminUser? @relation("TripMediaModerator", fields: [reviewedByAdminId], references: [id], onDelete: SetNull)
+  reviewedAt        DateTime?
+  /// Shown to the uploader, never published.
+  rejectionReason   String?
+
+  sortOrder Int @default(0)
+
+  createdAt DateTime @default(now())
+
+  /// The public read: approved rows for one trip, in curator order.
+  @@index([tripId, moderationStatus, sortOrder])
+  @@index([moderationStatus, createdAt])
+  @@map("trip_media")
+}
+
+/// One traveller's verdict on one trip: prose, plus a score per dimension.
+model TripReview {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  tripId String   @db.Uuid
+  trip   PastTrip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+
+  /// Required, unlike everywhere else. A review is only meaningful if we can
+  /// say it came from somebody who went, and that check runs against an
+  /// account. Cascade: deleting an account takes its opinions with it.
+  userId String @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// What the public page prints in large type.
+  headline String
+  /// The feedback itself.
+  body     String
+
+  /// How they want to be credited. Null falls back to the account's name.
+  displayName String?
+
+  moderationStatus ModerationStatus @default(PENDING)
+
+  reviewedByAdminId String?    @db.Uuid
+  reviewedByAdmin   AdminUser? @relation("TripReviewModerator", fields: [reviewedByAdminId], references: [id], onDelete: SetNull)
+  reviewedAt        DateTime?
+  rejectionReason   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  ratings TripReviewRating[]
+
+  /// One review per person per trip. Editing yours replaces it; a second
+  /// opinion is not a second voice, and the averages would double-count it.
+  @@unique([tripId, userId])
+  @@index([tripId, moderationStatus])
+  @@index([moderationStatus, createdAt])
+  @@map("trip_reviews")
+}
+
+/// One score, on one axis, from one review.
+///
+/// A row per dimension rather than seven columns. Columns would mean a
+/// migration to ask a new question and a NULL on every historical row to answer
+/// it — and NULL in a numeric column is exactly the value that gets averaged as
+/// zero by somebody in a hurry. A missing row is missing, and an average over
+/// rows cannot silently include it.
+model TripReviewRating {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  reviewId String     @db.Uuid
+  review   TripReview @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+
+  dimension ReviewDimension
+
+  /// 1 to 5, enforced by a CHECK in the migration. Integers only: half-stars
+  /// are a rendering decision, not a thing a traveller should have to express.
+  score Int
+
+  /// One score per dimension per review. Without this, a client that retried a
+  /// submission would double the weight of whichever axis it resent.
+  @@unique([reviewId, dimension])
+  @@index([dimension])
+  @@map("trip_review_ratings")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Booking a departure
+//
+// Buying a seat on a dated group trip, as opposed to unlocking an itinerary or
+// subscribing. `PaymentPurpose.BOOKING` has existed since the payments module
+// was written and did nothing; this is what it now points at.
+//
+// THE SEAT IS HELD AT BOOKING, NOT AT SETTLEMENT
+//
+// A booking claims its seats the moment it is created, before anybody pays.
+// The alternative — claim on settlement — lets two travellers both reach a
+// payment page for the last seat, and one of them pays for something that no
+// longer exists. Holding early costs an abandoned checkout tying up a seat for
+// a while, and that is the cheaper failure by a wide margin.
+//
+// EVERY MONEY COLUMN IS A SNAPSHOT
+//
+// `unitPriceBdt`, `subtotalBdt`, `discountBdt` and `totalBdt` are written once,
+// at booking time, and never recomputed. A departure repriced next week must not
+// change what somebody already agreed to pay, and a coupon that expires must not
+// retroactively raise a total. The price on a booking is a promise; the price on
+// a departure is an offer.
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum BookingStatus {
+  /// Seats are held, nothing is paid. Cancelling releases them.
+  PENDING_PAYMENT
+  /// Paid for. The seats stay held.
+  CONFIRMED
+  /// Released the seats. Reachable from either state above.
+  CANCELLED
+  /// Money returned after confirmation. Seats already released.
+  REFUNDED
+}
+
+model PackageBooking {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  /// Short human code, e.g. `BB-7F3K2Q`. What a traveller quotes on the phone
+  /// and what appears on their receipt. Unique, and never reused.
+  reference String @unique
+
+  /// SetNull rather than Cascade, exactly like Payment: a deleted account must
+  /// not erase the record of a trip that ran and was paid for.
+  userId String? @db.Uuid
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  /// Restrict on both. A package or departure with bookings against it is one
+  /// that was sold; deleting the row out from under the financial record would
+  /// leave "they paid ৳62,000 for something" with no way to say what.
+  packageId String        @db.Uuid
+  package   TravelPackage @relation(fields: [packageId], references: [id], onDelete: Restrict)
+
+  departureId String           @db.Uuid
+  departure   PackageDeparture @relation(fields: [departureId], references: [id], onDelete: Restrict)
+
+  /// Seats held. Also the multiplier on the price.
+  partySize Int
+
+  /// Whole taka per person, as it stood when this was booked — the departure's
+  /// override if it had one, otherwise the package price.
+  unitPriceBdt Int
+  /// `unitPriceBdt * partySize`. Stored rather than derived, so a later change
+  /// to either input cannot silently restate an agreed figure.
+  subtotalBdt  Int
+  /// What the coupon took off, in whole taka. Zero when none was used.
+  discountBdt  Int @default(0)
+  /// `subtotalBdt - discountBdt`. What is actually charged.
+  totalBdt     Int
+
+  status BookingStatus @default(PENDING_PAYMENT)
+
+  /// Who to contact. Kept on the booking rather than read from the account,
+  /// because somebody books for their parents and the account is theirs.
+  contactName  String
+  /// Lowercased and trimmed, like every other email column here.
+  contactEmail String
+  contactPhone String?
+
+  notes String?
+
+  confirmedAt        DateTime?
+  cancelledAt        DateTime?
+  /// Why it was cancelled. Shown to the traveller.
+  cancellationReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  payments   Payment[]
+  redemption CouponRedemption?
+
+  @@index([userId, status])
+  @@index([departureId, status])
+  @@index([status, createdAt])
+  @@map("package_bookings")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Coupons
+//
+// A discount code, and the record of every time one was used.
+//
+// The redemption row is what makes the limits real. `redeemedCount` on the
+// coupon is a denormalisation for the console; `coupon_redemptions` is the
+// record of truth, it is UNIQUE on the booking, and the per-account ceiling is
+// counted from it rather than trusted to a column somebody could edit.
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum CouponType {
+  /// `value` is a percentage, 1–100. `maxDiscountBdt` caps what it takes off.
+  PERCENT
+  /// `value` is whole taka off the subtotal.
+  FIXED
+}
+
+model Coupon {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  /// Always uppercase. A CHECK enforces it, because the lookup is exact and
+  /// "earlybird" not matching "EARLYBIRD" is the single most predictable
+  /// support ticket a coupon feature can generate.
+  code String @unique
+
+  /// What a traveller sees when it applies, e.g. "Early bird — 15% off".
+  label       String
+  description String?
+
+  type  CouponType
+  /// 1–100 for PERCENT, whole taka for FIXED. A CHECK bounds both.
+  value Int
+
+  /// Ceiling on a PERCENT discount, in whole taka. Null means uncapped, which
+  /// should be a decision rather than a default — 20% of a ৳112,000 trip is
+  /// ৳22,400.
+  maxDiscountBdt Int?
+  /// Smallest subtotal this may be used against.
+  minSpendBdt    Int?
+
+  /// The window. Both null means it runs until somebody switches it off.
+  startsAt DateTime?
+  endsAt   DateTime?
+
+  /// Total redemptions allowed across everybody. Null is unlimited.
+  maxRedemptions Int?
+  /// Per account. Defaults to one, which is what a promo code usually means.
+  maxPerUser     Int  @default(1)
+
+  /// Denormalised for the console's list view. `coupon_redemptions` is the
+  /// record of truth, and the ceiling is enforced against it rather than this.
+  redeemedCount Int @default(0)
+
+  /// Restrict this code to one trip. Null means it works on any of them.
+  packageId String?        @db.Uuid
+  package   TravelPackage? @relation(fields: [packageId], references: [id], onDelete: SetNull)
+
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  redemptions CouponRedemption[]
+
+  @@index([isActive, endsAt])
+  @@index([packageId])
+  @@map("coupons")
+}
+
+model CouponRedemption {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  couponId String @db.Uuid
+  coupon   Coupon @relation(fields: [couponId], references: [id], onDelete: Cascade)
+
+  /// Null for a booking made without an account. The per-account ceiling then
+  /// cannot bind, which is why a code with `maxPerUser` set should also carry a
+  /// `maxRedemptions` — see the validation service.
+  userId String? @db.Uuid
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  /// One redemption per booking. The unique is what stops a retried request
+  /// discounting the same booking twice.
+  bookingId String         @unique @db.Uuid
+  booking   PackageBooking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  /// What it actually took off, in whole taka. Recorded rather than recomputed:
+  /// the coupon's terms may change afterwards, and this is what was given.
+  discountBdt Int
+
+  createdAt DateTime @default(now())
+
+  @@index([couponId, userId])
+  @@map("coupon_redemptions")
 }

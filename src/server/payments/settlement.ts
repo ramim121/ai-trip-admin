@@ -8,6 +8,7 @@ import {
 } from '@/generated/prisma/enums'
 import { db } from '@/lib/db'
 import { conflict, internal, notFound } from '@/server/http/errors'
+import { confirmBooking } from '@/server/modules/bookings/service'
 import { addMonths } from '@/server/modules/entitlements/service'
 import { PAYMENT_SELECT, type PaymentRecord, type SettlementOutcome } from './provider'
 
@@ -81,6 +82,10 @@ const SETTLEMENT_SELECT = {
   ...PAYMENT_SELECT,
   itineraryId: true,
   planId: true,
+  // The third grant target. Without it the BOOKING branch below reads
+  // `undefined` and confirms nothing, which is a booking somebody paid for and
+  // never received — silently, since the payment itself still succeeds.
+  bookingId: true,
 } as const
 
 /**
@@ -202,6 +207,8 @@ interface SettlingPayment {
   purpose: PaymentPurpose
   itineraryId: string | null
   planId: string | null
+  /** The booking to confirm. Null on a quote-driven booking ops settles by hand. */
+  bookingId: string | null
 }
 
 /**
@@ -228,12 +235,18 @@ async function grant(tx: TransactionClient, payment: SettlingPayment, now: Date)
 
     case PaymentPurpose.BOOKING:
       /*
-       * Deliberately nothing. A booking is a trip ops fulfils against a quote;
-       * there is no self-service entitlement to hand over, and no checkout in
-       * this module creates one. Reachable only if somebody later routes a
-       * BOOKING payment through here, and silence is then correct — the payment
-       * is recorded and a human does the rest.
+       * A seat on a dated departure. `bookingId` is null for the other kind of
+       * booking — a large trip ops settles by hand against a quote — and
+       * silence remains correct there: the payment is recorded and a human does
+       * the rest.
+       *
+       * The seats are NOT claimed here. They were held when the booking was
+       * created, before anybody reached a payment page, because claiming at
+       * settlement lets two travellers both pay for the last seat. Claiming
+       * again here would double-count the party.
        */
+      if (payment.bookingId === null) return
+      await confirmBooking(tx, payment.bookingId, now)
       return
   }
 }

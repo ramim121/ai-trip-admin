@@ -61,3 +61,8 @@ next-env.d.ts
 /.claude/
 /.windsurf/
 /skills-lock.json
+
+# Graphify's analysis cache — a few megabytes of JSON derived entirely from the
+# source tree beside it. Committing it would put a second, staler copy of the
+# codebase in the repo and produce an enormous diff on every run.
+/graphify-out/

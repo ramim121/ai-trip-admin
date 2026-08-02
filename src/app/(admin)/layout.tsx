@@ -17,11 +17,28 @@ import { readConsoleAdmin } from './_lib/console-session'
  * and every action re-checks for itself.
  */
 
+/**
+ * Grouped by what somebody came here to do rather than alphabetically. The
+ * catalogue first, because it changes most often; then the money; then the two
+ * screens that exist to answer "why is it behaving like that" — AI spend, and
+ * what the public poll is being told.
+ */
 const NAV = [
   { href: '/activities', label: 'Activities' },
+  { href: '/packages', label: 'Packages' },
+  { href: '/past-trips', label: 'Past trips' },
+  { href: '/leaders', label: 'Leaders' },
+  { href: '/interests', label: 'Interest' },
+  { href: '/polls', label: 'Polls' },
   { href: '/plans', label: 'Plans' },
   { href: '/subscriptions', label: 'Subscriptions' },
+  // Bookings before Payments, and both before Coupons: a question about money
+  // nearly always starts at "which booking", and the coupon is the explanation
+  // for a figure on it rather than a thing anybody comes looking for first.
+  { href: '/bookings', label: 'Bookings' },
   { href: '/payments', label: 'Payments' },
+  { href: '/coupons', label: 'Coupons' },
+  { href: '/ai-usage', label: 'AI usage' },
 ] as const
 
 export default async function AdminLayout({ children }: { children: ReactNode }) {

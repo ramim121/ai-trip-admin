@@ -1,5 +1,6 @@
 import { generateObject } from 'ai'
 import { z } from 'zod'
+import { AiCallOutcome, AiSurface } from '@/generated/prisma/enums'
 import { DEFAULT_AI_LIMITS, buildMessages } from '@/server/ai/guard'
 import { teaserSystemPrompt } from '@/server/ai/prompts/teaser'
 import { getModel, schemaConstrainedModel } from '@/server/ai/provider'
@@ -8,6 +9,7 @@ import {
   type TeaserQuestionnaire,
   type TeaserResponse,
 } from '@/server/ai/schemas'
+import { errorKindOf, recordAiUsage, type AiActorContext } from '@/server/ai/usage-log'
 import { hashIp } from '@/server/auth/crypto'
 import { ApiError } from '@/server/http/errors'
 import type { RateLimitRule } from '@/server/http/rate-limit'
@@ -223,8 +225,16 @@ const TEASER_TEMPERATURE = 0.6
  *
  * A throw means no reply was produced. Callers must treat it that way and hand
  * the visitor's prompt back.
+ *
+ * `context` is who to attribute the spend to. Optional because the call works
+ * without it and a missing attribution is better than a failed preview — but
+ * every real call site has it, and a teaser row with no actor is the one that
+ * should look odd on the console.
  */
-export async function generateTeaser(answers: TeaserQuestionnaire): Promise<TeaserResponse> {
+export async function generateTeaser(
+  answers: TeaserQuestionnaire,
+  context: AiActorContext = {}
+): Promise<TeaserResponse> {
   // The cheap model is safe HERE and nowhere the prompt is load-bearing.
   //
   // Everything this call must not do is enforced by TeaserResponseSchema rather
@@ -250,6 +260,10 @@ export async function generateTeaser(answers: TeaserQuestionnaire): Promise<Teas
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), TEASER_WALL_CLOCK_MS)
 
+  // Wall clock measured around the provider call only, so a slow database or a
+  // slow cache read never shows up on the console as a slow model.
+  const startedAt = Date.now()
+
   try {
     const result = await generateObject({
       model: active.model,
@@ -264,7 +278,35 @@ export async function generateTeaser(answers: TeaserQuestionnaire): Promise<Teas
       abortSignal: controller.signal,
     })
 
+    // Recorded before the re-validation below, deliberately. The provider has
+    // already billed us by this point, so a reply that fails our own schema is
+    // spend that happened — booking it as a success we then threw away is more
+    // honest than not booking it at all.
+    recordAiUsage({
+      surface: AiSurface.TEASER,
+      outcome: AiCallOutcome.SUCCEEDED,
+      selection: active,
+      usage: result.usage,
+      latencyMs: Date.now() - startedAt,
+      ...context,
+    })
+
     return TeaserResponseSchema.parse(result.object)
+  } catch (e) {
+    // A timeout aborts mid-stream, so the provider may well have billed for
+    // tokens it never finished sending. There is no usage object to read on
+    // this path — hence null token counts rather than zeros, which would read
+    // as "this failure was free".
+    recordAiUsage({
+      surface: AiSurface.TEASER,
+      outcome: AiCallOutcome.FAILED,
+      selection: active,
+      latencyMs: Date.now() - startedAt,
+      errorKind: errorKindOf(e),
+      ...context,
+    })
+
+    throw e
   } finally {
     clearTimeout(timer)
   }

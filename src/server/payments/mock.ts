@@ -149,6 +149,7 @@ class MockPaymentProvider implements PaymentProvider {
         idempotencyKey: intent.idempotencyKey,
         itineraryId: intent.itineraryId,
         planId: intent.planId,
+        bookingId: intent.bookingId,
       },
       select: { id: true },
     })
