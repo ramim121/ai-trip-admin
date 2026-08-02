@@ -67,6 +67,12 @@ import {
   UpdateBlockBody,
   UpdateItineraryBody,
 } from '@/server/modules/planner/schema'
+import {
+  DecideQuoteBody,
+  QuoteListResponse,
+  QuoteView,
+  RequestQuoteBody,
+} from '@/server/modules/quotes/schema'
 import { errorResponse, registerRoute } from './registry'
 
 /**
@@ -1483,6 +1489,85 @@ registerRoute({
   responses: {
     200: { schema: BookingListResponse, description: 'This traveller’s bookings.' },
     401: errorResponse('Authentication is required.'),
+    500: errorResponse(UNEXPECTED),
+  },
+})
+
+// ── Quotations ──────────────────────────────────────────────────────────────
+
+const QUOTES = ['Quotations'] as const
+
+registerRoute({
+  method: 'post',
+  path: '/api/v1/itineraries/{id}/quote',
+  operationId: 'requestQuote',
+  summary: 'Ask what a trip would cost',
+  description:
+    'Opens a conversation with ops rather than returning a price. Nothing is computed and the ' +
+    'response carries no figures until somebody has priced it by hand — an instant number on a ' +
+    'bespoke trip would be a guess presented as a quote.\n\n' +
+    'One OPEN quote per itinerary. Asking again while ops is working answers 409 rather than ' +
+    'opening a second conversation about the same trip; asking again after a decline is a ' +
+    'genuinely new request and is allowed.\n\n' +
+    'The body carries a note and nothing else. No amount a client sends is read anywhere in this ' +
+    'flow.',
+  tags: QUOTES,
+  security: 'user',
+  requestSchema: RequestQuoteBody,
+  responses: {
+    201: { schema: QuoteView, description: 'The quote, awaiting a price.' },
+    400: errorResponse('The trip has no days yet, so there is nothing to price.'),
+    401: errorResponse('Authentication is required.'),
+    404: errorResponse(NOT_MY_ITINERARY),
+    409: errorResponse('A quote for this trip is already open.'),
+    429: errorResponse('Too many quote requests from this account in the last hour.'),
+    500: errorResponse(UNEXPECTED),
+  },
+})
+
+registerRoute({
+  method: 'get',
+  path: '/api/v1/me/quotes',
+  operationId: 'listMyQuotes',
+  summary: 'Every quote this traveller has asked for',
+  description:
+    'Newest first. No parameter says whose — the user id comes from the token, exactly as on ' +
+    '/me/payments and /me/bookings.\n\n' +
+    'DRAFT REVISIONS ARE ABSENT. Only versions ops has actually sent appear, so a traveller sees ' +
+    'the prices we have agreed to stand behind and never the ones still being worked out. A quote ' +
+    'awaiting pricing therefore arrives with an empty `revisions` array, which is the truthful ' +
+    'representation of "we have your request and are working on it".',
+  tags: QUOTES,
+  security: 'user',
+  responses: {
+    200: { schema: QuoteListResponse, description: 'The traveller’s quotes, sent versions only.' },
+    401: errorResponse('Authentication is required.'),
+    500: errorResponse(UNEXPECTED),
+  },
+})
+
+registerRoute({
+  method: 'post',
+  path: '/api/v1/quotes/{id}/decide',
+  operationId: 'decideQuote',
+  summary: 'Accept or decline a quote',
+  description:
+    'A conditional update predicated on the quote still being SENT, so a double-click — or a ' +
+    'click racing an ops withdrawal — resolves to one decision rather than to whichever write ' +
+    'landed last. A second attempt answers 409 with a sentence instead of silently overwriting ' +
+    'the first.\n\n' +
+    'ACCEPTING TAKES NO MONEY. It records agreement and moves the itinerary to ACCEPTED; paying ' +
+    'is a separate and deliberate act through the payments endpoints. Collapsing the two would ' +
+    'mean one click both agreeing a price and charging for it.',
+  tags: QUOTES,
+  security: 'user',
+  requestSchema: DecideQuoteBody,
+  responses: {
+    200: { schema: QuoteView, description: 'The quote as it now stands.' },
+    400: errorResponse('The body was not valid.'),
+    401: errorResponse('Authentication is required.'),
+    404: errorResponse('No such quote, or it is not yours.'),
+    409: errorResponse('The quote is no longer open for a decision.'),
     500: errorResponse(UNEXPECTED),
   },
 })

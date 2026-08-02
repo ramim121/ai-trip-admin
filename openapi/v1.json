@@ -3190,6 +3190,257 @@
           }
         }
       }
+    },
+    "/api/v1/itineraries/{id}/quote": {
+      "post": {
+        "operationId": "requestQuote",
+        "summary": "Ask what a trip would cost",
+        "description": "Opens a conversation with ops rather than returning a price. Nothing is computed and the response carries no figures until somebody has priced it by hand — an instant number on a bespoke trip would be a guess presented as a quote.\n\nOne OPEN quote per itinerary. Asking again while ops is working answers 409 rather than opening a second conversation about the same trip; asking again after a decline is a genuinely new request and is allowed.\n\nThe body carries a note and nothing else. No amount a client sends is read anywhere in this flow.",
+        "tags": [
+          "Quotations"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestQuoteBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The quote, awaiting a price.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The trip has no days yet, so there is nothing to price.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such itinerary, or it belongs to another traveller. The two are deliberately indistinguishable, for the same reason a session is.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A quote for this trip is already open.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many quote requests from this account in the last hour.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/me/quotes": {
+      "get": {
+        "operationId": "listMyQuotes",
+        "summary": "Every quote this traveller has asked for",
+        "description": "Newest first. No parameter says whose — the user id comes from the token, exactly as on /me/payments and /me/bookings.\n\nDRAFT REVISIONS ARE ABSENT. Only versions ops has actually sent appear, so a traveller sees the prices we have agreed to stand behind and never the ones still being worked out. A quote awaiting pricing therefore arrives with an empty `revisions` array, which is the truthful representation of \"we have your request and are working on it\".",
+        "tags": [
+          "Quotations"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The traveller’s quotes, sent versions only.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/quotes/{id}/decide": {
+      "post": {
+        "operationId": "decideQuote",
+        "summary": "Accept or decline a quote",
+        "description": "A conditional update predicated on the quote still being SENT, so a double-click — or a click racing an ops withdrawal — resolves to one decision rather than to whichever write landed last. A second attempt answers 409 with a sentence instead of silently overwriting the first.\n\nACCEPTING TAKES NO MONEY. It records agreement and moves the itinerary to ACCEPTED; paying is a separate and deliberate act through the payments endpoints. Collapsing the two would mean one click both agreeing a price and charging for it.",
+        "tags": [
+          "Quotations"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecideQuoteBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The quote as it now stands.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body was not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such quote, or it is not yours.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The quote is no longer open for a decision.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -3684,6 +3935,18 @@
           "refusal"
         ],
         "additionalProperties": false
+      },
+      "DecideQuoteBody": {
+        "type": "object",
+        "properties": {
+          "accept": {
+            "type": "boolean",
+            "description": "True to accept the quote, false to decline it."
+          }
+        },
+        "required": [
+          "accept"
+        ]
       },
       "DestinationActivitiesResponse": {
         "type": "object",
@@ -7549,6 +7812,21 @@
           "partySize"
         ]
       },
+      "QuoteListResponse": {
+        "type": "object",
+        "properties": {
+          "quotes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuoteView"
+            }
+          }
+        },
+        "required": [
+          "quotes"
+        ],
+        "additionalProperties": false
+      },
       "QuoteResponse": {
         "type": "object",
         "properties": {
@@ -7634,6 +7912,245 @@
           "seatsLeft",
           "coupon",
           "couponRefusal"
+        ],
+        "additionalProperties": false
+      },
+      "QuoteRevisionView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991,
+            "description": "1-based. Version 2 exists because the price changed."
+          },
+          "subtotalBdt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Whole taka, before any discount."
+          },
+          "discountBdt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "totalBdt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "`subtotalBdt - discountBdt`. What was quoted."
+          },
+          "inclusions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "What the price covers, as ops wrote it."
+          },
+          "exclusions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "What it does not."
+          },
+          "terms": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "travellerMessage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "validUntil": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "After this the price is no longer held."
+          },
+          "sentAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When the traveller was shown this version. Null means it is still a draft — and a traveller-facing response never contains one, because a draft is a price nobody has agreed to quote them."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+          }
+        },
+        "required": [
+          "id",
+          "version",
+          "subtotalBdt",
+          "discountBdt",
+          "totalBdt",
+          "inclusions",
+          "exclusions",
+          "terms",
+          "travellerMessage",
+          "validUntil",
+          "sentAt",
+          "createdAt"
+        ],
+        "additionalProperties": false
+      },
+      "QuoteTripView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "title": {
+            "type": "string"
+          },
+          "destinationLabel": {
+            "type": "string"
+          },
+          "totalDays": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "partySize": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "destinationLabel",
+          "totalDays",
+          "partySize"
+        ],
+        "additionalProperties": false
+      },
+      "QuoteView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "REQUESTED",
+              "PRICED",
+              "SENT",
+              "ACCEPTED",
+              "DECLINED",
+              "WITHDRAWN",
+              "EXPIRED"
+            ]
+          },
+          "travellerNote": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the traveller said when asking."
+          },
+          "requestedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+          },
+          "decidedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null while the quote is still open."
+          },
+          "itineraryId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null when the trip has since been deleted."
+          },
+          "itinerary": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QuoteTripView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revisions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuoteRevisionView"
+            },
+            "description": "Newest first. Empty until ops has sent a price."
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "travellerNote",
+          "requestedAt",
+          "decidedAt",
+          "itineraryId",
+          "itinerary",
+          "revisions"
         ],
         "additionalProperties": false
       },
@@ -7957,6 +8474,16 @@
           "message"
         ],
         "additionalProperties": false
+      },
+      "RequestQuoteBody": {
+        "type": "object",
+        "properties": {
+          "note": {
+            "description": "Anything the traveller wants ops to know before pricing.",
+            "type": "string",
+            "maxLength": 2000
+          }
+        }
       },
       "ResetPasswordBody": {
         "type": "object",
