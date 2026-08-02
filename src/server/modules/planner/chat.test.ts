@@ -250,6 +250,7 @@ function session(tripBrief: TripBrief): PlannerSessionRecord {
     userId: USER_ID,
     anonymousVisitorId: null,
     status: PlannerSessionStatus.ACTIVE,
+    itineraryId: null,
     tripBrief,
     createdAt: new Date('2026-08-01T00:00:00.000Z'),
     lastMessageAt: new Date('2026-08-01T00:00:00.000Z'),

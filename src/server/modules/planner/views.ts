@@ -23,6 +23,7 @@ export function toPlannerSessionView(
     tripBrief: session.tripBrief,
     createdAt: session.createdAt.toISOString(),
     lastMessageAt: session.lastMessageAt.toISOString(),
+    itineraryId: session.itineraryId,
     resumed,
     messages: messages.map((message) => ({
       id: message.id,

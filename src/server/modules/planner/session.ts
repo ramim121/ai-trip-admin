@@ -53,6 +53,8 @@ export interface PlannerSessionRecord {
   tripBrief: TripBrief
   createdAt: Date
   lastMessageAt: Date
+  /** The most recent itinerary built in this session, if any. */
+  itineraryId: string | null
 }
 
 const SESSION_SELECT = {
@@ -63,6 +65,25 @@ const SESSION_SELECT = {
   tripBrief: true,
   createdAt: true,
   lastMessageAt: true,
+  /*
+   * The trip this conversation produced, so a returning traveller gets it back.
+   *
+   * WITHOUT THIS THE PLANNER CANNOT RESUME, and the consequence was worse than
+   * an inconvenience. `/plan` takes no itinerary id and the client never re-read
+   * one, so every mount started from nothing — and because upgrading navigates
+   * away and back, somebody who had just paid to lift their day limit returned
+   * to an empty planner offering to "build the itinerary", which created a
+   * SECOND row and stranded the trip they had paid to extend.
+   *
+   * `plannerSessionId` is a plain indexed FK rather than a unique one, so a
+   * session may legitimately own several itineraries. Most recent wins — stated
+   * here rather than left to whatever order Postgres happens to return.
+   */
+  itineraries: {
+    orderBy: { createdAt: 'desc' },
+    take: 1,
+    select: { id: true },
+  },
 } as const
 
 /** The brief with every field absent — where a conversation starts. */
@@ -93,8 +114,15 @@ function toRecord(row: {
   tripBrief: Prisma.JsonValue
   createdAt: Date
   lastMessageAt: Date
+  itineraries: { id: string }[]
 }): PlannerSessionRecord {
-  return { ...row, tripBrief: readTripBrief(row.tripBrief) }
+  const { itineraries, ...rest } = row
+  return {
+    ...rest,
+    tripBrief: readTripBrief(row.tripBrief),
+    // `take: 1` ordered newest-first, so index 0 is the current trip or nothing.
+    itineraryId: itineraries[0]?.id ?? null,
+  }
 }
 
 /**

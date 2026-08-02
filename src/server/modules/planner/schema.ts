@@ -130,6 +130,9 @@ export const PlannerSession = z
     tripBrief: TripBrief,
     createdAt: z.iso.datetime(),
     lastMessageAt: z.iso.datetime(),
+    itineraryId: z.uuid().nullable().describe(
+      "The most recent itinerary built in this session, or null. The planner reads this on mount to resume the trip rather than starting a second one."
+    ),
     /** False when this call created the session, true when it picked one up. */
     resumed: z.boolean(),
     messages: z.array(PlannerMessage),
