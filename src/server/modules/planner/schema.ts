@@ -23,9 +23,9 @@ import { CONFLICT_CODES } from './conflicts'
  *
  * Request and response shapes live together deliberately. The response schemas
  * are the definition of what leaves this process, so anything absent from them —
- * the owning user id, a cost price, the source of the `isFullyUnlocked`
- * recomputation — has to be a deliberate addition rather than something that
- * leaked in because a `select` grew a column.
+ * the owning user id, a cost price, a supplier margin — has to be a deliberate
+ * addition rather than something that leaked in because a `select` grew a
+ * column.
  *
  * Every schema carries `.meta({ id })` so the generator emits it as a named
  * component and beyond-borders-web's codegen gets a real type instead of an
@@ -271,7 +271,6 @@ export const Itinerary = z
     transportPreference: z.enum(TRANSPORT_PREFERENCES),
     budgetBand: z.enum(BUDGET_BANDS).nullable(),
     status: z.enum(ItineraryStatus),
-    isFullyUnlocked: z.boolean(),
     coverImageUrl: z.string().nullable(),
     createdAt: z.iso.datetime(),
     updatedAt: z.iso.datetime(),
@@ -291,7 +290,6 @@ export const ItinerarySummary = z
     totalDays: z.int(),
     partySize: z.int(),
     status: z.enum(ItineraryStatus),
-    isFullyUnlocked: z.boolean(),
     updatedAt: z.iso.datetime(),
   })
   .meta({ id: 'ItinerarySummary' })

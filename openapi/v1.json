@@ -4191,9 +4191,6 @@
               "CANCELLED"
             ]
           },
-          "isFullyUnlocked": {
-            "type": "boolean"
-          },
           "coverImageUrl": {
             "anyOf": [
               {
@@ -4249,7 +4246,6 @@
           "transportPreference",
           "budgetBand",
           "status",
-          "isFullyUnlocked",
           "coverImageUrl",
           "createdAt",
           "updatedAt",
@@ -4535,9 +4531,6 @@
               "CANCELLED"
             ]
           },
-          "isFullyUnlocked": {
-            "type": "boolean"
-          },
           "updatedAt": {
             "type": "string",
             "format": "date-time",
@@ -4552,7 +4545,6 @@
           "totalDays",
           "partySize",
           "status",
-          "isFullyUnlocked",
           "updatedAt"
         ],
         "additionalProperties": false
