@@ -201,7 +201,7 @@ export const DEFAULT_UNLOCK_PRICE_BDT = 200
 export const UNLOCK_PRICE_SETTING_KEY = 'payments.itineraryUnlockPriceBdt'
 
 /** The entry premium tier, and so the tier a wall points at by default. */
-export const DEFAULT_UPGRADE_PLAN = PlanCode.PREMIUM_10
+export const DEFAULT_UPGRADE_PLAN = PlanCode.PREMIUM_5
 
 /**
  * Whole taka only, and never negative.
@@ -421,7 +421,8 @@ export async function resolveEntitlement(
 ): Promise<Entitlement> {
   if (userId === null) return anonymousEntitlement(now)
 
-  const [subscription, freePlan, unlockPrice] = await Promise.all([
+  const [account, subscription, freePlan, unlockPrice] = await Promise.all([
+    db.user.findUnique({ where: { id: userId }, select: { unlimited: true } }),
     db.subscription.findFirst({
       where: {
         userId,
@@ -451,6 +452,22 @@ export async function resolveEntitlement(
     }),
   ])
 
+  /*
+   * An account exempt from metering, expressed the way this module already
+   * understands: every ceiling null.
+   *
+   * NOT A NEW BRANCH IN EVERY CALLER. `canGenerateDays`, `canSaveItinerary` and
+   * the period checks all test `=== null` first and treat it as unlimited, so
+   * routing the exemption through the existing nulls means it is honoured
+   * everywhere without a second concept to keep in sync — and without a
+   * `if (unlimited)` that somebody adds to three of the four call sites.
+   *
+   * The plan is left as whatever they are actually on. The exemption lifts the
+   * limits; it does not rewrite what tier the account holds, and reporting
+   * should still see the truth.
+   */
+  const exempt = account?.unlimited === true
+
   return {
     planCode: plan?.code ?? PlanCode.FREE,
     planName: plan?.name ?? 'Free',
@@ -458,10 +475,10 @@ export async function resolveEntitlement(
     // `plan ? plan.x : FALLBACK` rather than `plan?.x ?? FALLBACK`: the second
     // form cannot tell "no plan row" from "the plan says unlimited", and would
     // silently downgrade every premium account to the free tier's caps.
-    maxItineraryDays: plan ? plan.maxItineraryDays : FREE_MAX_ITINERARY_DAYS,
-    maxSavedItineraries: plan ? plan.maxSavedItineraries : FREE_MAX_SAVED_ITINERARIES,
-    itinerariesPerPeriod: plan ? plan.itinerariesPerPeriod : null,
-    aiPromptsPerPeriod: plan ? plan.aiPromptsPerPeriod : FREE_AI_PROMPTS_PER_PERIOD,
+    maxItineraryDays: exempt ? null : plan ? plan.maxItineraryDays : FREE_MAX_ITINERARY_DAYS,
+    maxSavedItineraries: exempt ? null : plan ? plan.maxSavedItineraries : FREE_MAX_SAVED_ITINERARIES,
+    itinerariesPerPeriod: exempt ? null : plan ? plan.itinerariesPerPeriod : null,
+    aiPromptsPerPeriod: exempt ? null : plan ? plan.aiPromptsPerPeriod : FREE_AI_PROMPTS_PER_PERIOD,
     savedCount,
     periodUsage: {
       itinerariesCreated: counter?.itinerariesCreated ?? 0,
@@ -482,35 +499,12 @@ export async function resolveActorEntitlement(
   return resolveEntitlement(actor.kind === 'user' ? actor.userId : null, now)
 }
 
-/** Whether this specific itinerary has been bought outright. */
-export async function isItineraryUnlocked(userId: string, itineraryId: string): Promise<boolean> {
-  // The record of truth is this row, never `Itinerary.isFullyUnlocked` — that
-  // column is a denormalised cache for list views, recomputed from here.
-  // Reading the cache to decide an entitlement would turn a stale write into a
-  // free upgrade.
-  const unlock = await db.itineraryUnlock.findUnique({
-    where: { userId_itineraryId: { userId, itineraryId } },
-    select: { id: true },
-  })
-  return unlock !== null
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Offers
 // ─────────────────────────────────────────────────────────────────────────────
 
 function signInOffer(): UpgradeOffer {
   return { action: 'SIGN_IN', planCode: PlanCode.FREE, priceBdt: 0, label: 'Create a free account' }
-}
-
-function unlockOffer(itineraryId: string, priceBdt: number): UpgradeOffer {
-  return {
-    action: 'UNLOCK_ITINERARY',
-    planCode: PlanCode.UNLOCK_SINGLE,
-    priceBdt,
-    label: `Unlock this itinerary in full for ${priceBdt} BDT`,
-    itineraryId,
-  }
 }
 
 function subscribeOffer(label: string): UpgradeOffer {
@@ -579,19 +573,6 @@ export async function canGenerateDays(
     }
   }
 
-  const unlocked = itineraryId != null && (await isItineraryUnlocked(actor.userId, itineraryId))
-
-  if (unlocked) {
-    return {
-      maxDays: MAX_TRIP_DAYS,
-      unlimited: true,
-      unlocked: true,
-      source: 'UNLOCK',
-      entitlement: resolved,
-      refusal: null,
-    }
-  }
-
   if (resolved.maxItineraryDays === null) {
     return {
       maxDays: MAX_TRIP_DAYS,
@@ -613,14 +594,14 @@ export async function canGenerateDays(
     entitlement: resolved,
     refusal: {
       reason: 'FREE_DAY_LIMIT',
+      // One offer now, where there used to be two. The one-off unlock was the
+      // only thing a free account could buy for a single trip, so with it gone
+      // there is nothing to say about `itineraryId` here — every wall points at
+      // a monthly plan.
       message:
         `${resolved.planName} plans the first ${cap} ${cap === 1 ? 'day' : 'days'} of a trip. ` +
-        `Unlocking this itinerary for ${resolved.unlockPriceBdt} BDT plans the whole thing, ` +
-        'once, forever — or a monthly plan lifts the limit on everything.',
-      upgrade:
-        itineraryId != null
-          ? unlockOffer(itineraryId, resolved.unlockPriceBdt)
-          : subscribeOffer('Go monthly for full-length itineraries'),
+        'A monthly plan lifts the limit on every itinerary.',
+      upgrade: subscribeOffer('Go monthly for full-length itineraries'),
     },
   }
 }

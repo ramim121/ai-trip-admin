@@ -129,7 +129,6 @@ export interface ItineraryView {
   transportPreference: TransportPreference
   budgetBand: BudgetBand | null
   status: ItineraryStatus
-  isFullyUnlocked: boolean
   coverImageUrl: string | null
   createdAt: string
   updatedAt: string
@@ -147,7 +146,6 @@ export interface ItinerarySummaryView {
   totalDays: number
   partySize: number
   status: ItineraryStatus
-  isFullyUnlocked: boolean
   updatedAt: string
 }
 
@@ -219,7 +217,6 @@ const ITINERARY_SELECT = {
   transportPreference: true,
   budgetBand: true,
   status: true,
-  isFullyUnlocked: true,
   coverImageUrl: true,
   createdAt: true,
   updatedAt: true,
@@ -358,7 +355,6 @@ async function assemble(row: ItineraryRow, allowance: DayAllowance): Promise<Iti
     transportPreference: row.transportPreference,
     budgetBand: row.budgetBand,
     status: row.status,
-    isFullyUnlocked: row.isFullyUnlocked,
     coverImageUrl: row.coverImageUrl,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -415,7 +411,6 @@ export async function listItineraries(
         totalDays: true,
         partySize: true,
         status: true,
-        isFullyUnlocked: true,
         updatedAt: true,
       },
     }),

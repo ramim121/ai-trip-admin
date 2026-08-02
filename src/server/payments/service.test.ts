@@ -34,31 +34,22 @@ const ITINERARY_ID = '019373d4-4a1b-7c3e-9f00-6666ffff0006'
 
 /** Deliberately not 200: proves the figure is read, not remembered. */
 const CONFIGURED_UNLOCK_PRICE = 350
-const PREMIUM_10_PRICE = 990
+const PREMIUM_5_PRICE = 500
 
 const PLANS = [
   {
-    id: 'plan-premium-10',
-    code: 'PREMIUM_10',
-    name: 'Premium 10',
-    priceBdt: PREMIUM_10_PRICE,
+    id: 'plan-premium-5',
+    code: 'PREMIUM_5',
+    name: 'Premium 5',
+    priceBdt: PREMIUM_5_PRICE,
     interval: 'MONTHLY',
     isActive: true,
   },
   {
-    id: 'plan-unlock-single',
-    code: 'UNLOCK_SINGLE',
-    name: 'Full itinerary unlock',
-    priceBdt: 200,
-    // The whole reason this plan is dangerous: a price with no billing period.
-    interval: 'NONE',
-    isActive: true,
-  },
-  {
     id: 'plan-retired',
-    code: 'PREMIUM_50',
-    name: 'Premium 50',
-    priceBdt: 2900,
+    code: 'PREMIUM_100',
+    name: 'Premium 100',
+    priceBdt: 5000,
     interval: 'MONTHLY',
     isActive: false,
   },
@@ -288,9 +279,17 @@ async function refusalFrom(action: () => unknown): Promise<ApiError> {
   throw new Error('Expected a refusal, but the call succeeded.')
 }
 
-/** The common case, written once: a sandbox checkout for the seeded itinerary. */
-function unlockCheckout() {
-  return openCheckout(USER_ID, { purpose: 'ITINERARY_UNLOCK', itineraryId: ITINERARY_ID }, CONTEXT)
+/**
+ * The common case, written once: a sandbox checkout for the live monthly tier.
+ *
+ * This used to buy the one-off itinerary unlock. That product is gone, but the
+ * tests below were never about it — they cover settlement idempotence, replay
+ * and ownership, which are identical whatever the payment is for. Repointed
+ * rather than deleted, so that coverage survives the product it happened to be
+ * written against.
+ */
+function subscriptionCheckout() {
+  return openCheckout(USER_ID, { purpose: 'SUBSCRIPTION', planCode: 'PREMIUM_5' }, CONTEXT)
 }
 
 beforeEach(() => {
@@ -344,8 +343,8 @@ describe('server-side amount resolution', () => {
      * assertion below is that the row was priced from the settings row instead.
      */
     const parsed = CheckoutBody.parse({
-      purpose: 'ITINERARY_UNLOCK',
-      itineraryId: ITINERARY_ID,
+      purpose: 'SUBSCRIPTION',
+      planCode: 'PREMIUM_5',
       amountBdt: 1,
       priceBdt: 1,
       currency: 'BDT',
@@ -355,31 +354,22 @@ describe('server-side amount resolution', () => {
 
     const checkout = await openCheckout(USER_ID, parsed, CONTEXT)
 
-    expect(checkout.amountBdt).toBe(CONFIGURED_UNLOCK_PRICE)
-    expect(storedPayment(checkout.paymentId).amountBdt).toBe(CONFIGURED_UNLOCK_PRICE)
-  })
-
-  it('reads the unlock price from the settings row rather than a constant', async () => {
-    // 350 is not the seeded default. A hard-coded 200 would fail here, which is
-    // the only way to tell "reads the setting" from "happens to agree with it".
-    const checkout = await unlockCheckout()
-
-    expect(checkout.amountBdt).toBe(CONFIGURED_UNLOCK_PRICE)
-    expect(checkout.amountBdt).not.toBe(200)
+    expect(checkout.amountBdt).toBe(PREMIUM_5_PRICE)
+    expect(storedPayment(checkout.paymentId).amountBdt).toBe(PREMIUM_5_PRICE)
   })
 
   it('prices a subscription from the Plan row', async () => {
     const checkout = await openCheckout(
       USER_ID,
-      { purpose: 'SUBSCRIPTION', planCode: 'PREMIUM_10' },
+      { purpose: 'SUBSCRIPTION', planCode: 'PREMIUM_5' },
       CONTEXT
     )
 
-    expect(checkout.amountBdt).toBe(PREMIUM_10_PRICE)
+    expect(checkout.amountBdt).toBe(PREMIUM_5_PRICE)
   })
 
   it('marks every sandbox payment as a test row', async () => {
-    const checkout = await unlockCheckout()
+    const checkout = await subscriptionCheckout()
 
     expect(checkout.isTest).toBe(true)
     expect(checkout.provider).toBe('MOCK')
@@ -387,81 +377,9 @@ describe('server-side amount resolution', () => {
   })
 
   it('sends the traveller to the public site, not to this API', async () => {
-    const checkout = await unlockCheckout()
+    const checkout = await subscriptionCheckout()
 
     expect(checkout.redirectUrl).toBe(`http://localhost:3000/checkout/${checkout.paymentId}`)
-  })
-})
-
-// ─────────────────────────────────────────────────────────────────────────────
-// UNLOCK_SINGLE is a price, not a tier
-// ─────────────────────────────────────────────────────────────────────────────
-
-describe('UNLOCK_SINGLE as a subscription', () => {
-  it('is rejected at checkout', async () => {
-    /*
-     * The expensive mistake, refused at the first opportunity.
-     *
-     * UNLOCK_SINGLE carries `interval = NONE`. Were it allowed through, the
-     * settlement would write a Subscription row, `resolveEntitlement` would rank
-     * that plan by `sortOrder`, and one 200 BDT payment would become a permanent
-     * account-wide grant.
-     */
-    const error = await refusalFrom(() =>
-      openCheckout(USER_ID, { purpose: 'SUBSCRIPTION', planCode: 'UNLOCK_SINGLE' }, CONTEXT)
-    )
-
-    expect(error.status).toBe(400)
-    expect(error.details?.[0]?.path).toBe('planCode')
-    expect(error.message).toContain('one-off')
-  })
-
-  it('creates no payment row when it is rejected', async () => {
-    await refusalFrom(() =>
-      openCheckout(USER_ID, { purpose: 'SUBSCRIPTION', planCode: 'UNLOCK_SINGLE' }, CONTEXT)
-    )
-
-    expect(store.payments).toHaveLength(0)
-  })
-
-  it('also rejects FREE, for the same reason', async () => {
-    // Not a special case for one plan code — the rule is about `interval`, so
-    // any non-recurring row is refused the same way.
-    store.plans.push({
-      id: 'plan-free',
-      code: 'FREE',
-      name: 'Free',
-      priceBdt: 0,
-      interval: 'NONE',
-      isActive: true,
-    })
-
-    const error = await refusalFrom(() =>
-      openCheckout(USER_ID, { purpose: 'SUBSCRIPTION', planCode: 'FREE' }, CONTEXT)
-    )
-
-    expect(error.status).toBe(400)
-  })
-
-  it('refuses a plan that is no longer on sale', async () => {
-    const error = await refusalFrom(() =>
-      openCheckout(USER_ID, { purpose: 'SUBSCRIPTION', planCode: 'PREMIUM_50' }, CONTEXT)
-    )
-
-    expect(error.status).toBe(404)
-  })
-
-  it('never creates a Subscription when settling an itinerary unlock', async () => {
-    // The CRITICAL rule, asserted on the outcome rather than on a refusal: even
-    // a perfectly ordinary unlock purchase must leave the subscriptions table
-    // untouched.
-    const checkout = await unlockCheckout()
-
-    await completeMockPayment(USER_ID, checkout.paymentId, 'SUCCESS', CONTEXT)
-
-    expect(unlocks()).toHaveLength(1)
-    expect(subscriptions()).toHaveLength(0)
-    expect(mockDb.subscription.create).not.toHaveBeenCalled()
   })
 })
 
@@ -471,14 +389,13 @@ describe('UNLOCK_SINGLE as a subscription', () => {
 
 describe('idempotent settlement', () => {
   it('grants exactly once when the completion is submitted twice', async () => {
-    const checkout = await unlockCheckout()
+    const checkout = await subscriptionCheckout()
 
     const first = await completeMockPayment(USER_ID, checkout.paymentId, 'SUCCESS', CONTEXT)
     const second = await completeMockPayment(USER_ID, checkout.paymentId, 'SUCCESS', CONTEXT)
 
     // One grant, not two. The conditional update matched no row the second time.
-    expect(unlocks()).toHaveLength(1)
-    expect(mockDb.itineraryUnlock.create).toHaveBeenCalledTimes(1)
+    expect(subscriptions()).toHaveLength(1)
 
     // And the two responses are indistinguishable, which is what makes the
     // endpoint safe for a client to retry blindly.
@@ -487,7 +404,7 @@ describe('idempotent settlement', () => {
   })
 
   it('predicates the status flip on the current status', async () => {
-    const checkout = await unlockCheckout()
+    const checkout = await subscriptionCheckout()
 
     await completeMockPayment(USER_ID, checkout.paymentId, 'SUCCESS', CONTEXT)
 
@@ -510,17 +427,17 @@ describe('idempotent settlement', () => {
   it('does not re-settle when the outcome changes on the replay', async () => {
     // A confused or malicious client settling SUCCESS then FAILURE must not undo
     // anything: the payment is terminal after the first call.
-    const checkout = await unlockCheckout()
+    const checkout = await subscriptionCheckout()
 
     await completeMockPayment(USER_ID, checkout.paymentId, 'SUCCESS', CONTEXT)
     const replay = await completeMockPayment(USER_ID, checkout.paymentId, 'FAILURE', CONTEXT)
 
     expect(replay.payment.status).toBe('SUCCEEDED')
-    expect(unlocks()).toHaveLength(1)
+    expect(subscriptions()).toHaveLength(1)
   })
 
   it('audits the replay as such', async () => {
-    const checkout = await unlockCheckout()
+    const checkout = await subscriptionCheckout()
 
     await completeMockPayment(USER_ID, checkout.paymentId, 'SUCCESS', CONTEXT)
     await completeMockPayment(USER_ID, checkout.paymentId, 'SUCCESS', CONTEXT)
@@ -535,22 +452,22 @@ describe('idempotent settlement', () => {
   })
 
   it('grants nothing on a declined payment', async () => {
-    const checkout = await unlockCheckout()
+    const checkout = await subscriptionCheckout()
 
     const result = await completeMockPayment(USER_ID, checkout.paymentId, 'FAILURE', CONTEXT)
 
     expect(result.payment.status).toBe('FAILED')
     expect(result.grant).toBeNull()
-    expect(unlocks()).toHaveLength(0)
+    expect(subscriptions()).toHaveLength(0)
   })
 
   it('grants nothing on a cancelled payment', async () => {
-    const checkout = await unlockCheckout()
+    const checkout = await subscriptionCheckout()
 
     const result = await completeMockPayment(USER_ID, checkout.paymentId, 'CANCEL', CONTEXT)
 
     expect(result.payment.status).toBe('FAILED')
-    expect(unlocks()).toHaveLength(0)
+    expect(subscriptions()).toHaveLength(0)
   })
 })
 
@@ -560,7 +477,7 @@ describe('idempotent settlement', () => {
 
 describe('ownership enforcement', () => {
   it("refuses to settle another traveller's payment, and grants nothing", async () => {
-    const checkout = await unlockCheckout()
+    const checkout = await subscriptionCheckout()
 
     const error = await refusalFrom(() =>
       completeMockPayment(OTHER_USER_ID, checkout.paymentId, 'SUCCESS', CONTEXT)
@@ -569,12 +486,12 @@ describe('ownership enforcement', () => {
     // 404, not 403: a 403 would confirm that a guessed payment id names a real
     // payment, which is the reasoning the itinerary routes already follow.
     expect(error.status).toBe(404)
-    expect(unlocks()).toHaveLength(0)
+    expect(subscriptions()).toHaveLength(0)
     expect(storedPayment(checkout.paymentId).status).toBe('INITIATED')
   })
 
   it('lets the real owner settle the same payment afterwards', async () => {
-    const checkout = await unlockCheckout()
+    const checkout = await subscriptionCheckout()
 
     await refusalFrom(() =>
       completeMockPayment(OTHER_USER_ID, checkout.paymentId, 'SUCCESS', CONTEXT)
@@ -583,11 +500,11 @@ describe('ownership enforcement', () => {
     const result = await completeMockPayment(USER_ID, checkout.paymentId, 'SUCCESS', CONTEXT)
 
     expect(result.payment.status).toBe('SUCCEEDED')
-    expect(unlocks()).toHaveLength(1)
+    expect(subscriptions()).toHaveLength(1)
   })
 
   it("refuses to read another traveller's payment", async () => {
-    const checkout = await unlockCheckout()
+    const checkout = await subscriptionCheckout()
 
     const error = await refusalFrom(() => readPayment(OTHER_USER_ID, checkout.paymentId))
 
@@ -601,7 +518,7 @@ describe('ownership enforcement', () => {
      * the payment is simply not found — a 404, indistinguishable from one that
      * belongs to somebody else.
      */
-    const checkout = await unlockCheckout()
+    const checkout = await subscriptionCheckout()
     storedPayment(checkout.paymentId).provider = 'BKASH'
 
     const error = await refusalFrom(() =>
@@ -609,29 +526,9 @@ describe('ownership enforcement', () => {
     )
 
     expect(error.status).toBe(404)
-    expect(unlocks()).toHaveLength(0)
+    expect(subscriptions()).toHaveLength(0)
   })
 
-  it('refuses a checkout against an itinerary the caller does not own', async () => {
-    const error = await refusalFrom(() =>
-      openCheckout(
-        OTHER_USER_ID,
-        { purpose: 'ITINERARY_UNLOCK', itineraryId: ITINERARY_ID },
-        CONTEXT
-      )
-    )
-
-    expect(error.status).toBe(404)
-    expect(store.payments).toHaveLength(0)
-  })
-
-  it('refuses to sell the same itinerary twice', async () => {
-    store.unlocks.push({ userId: USER_ID, itineraryId: ITINERARY_ID, paymentId: 'payment-earlier' })
-
-    const error = await refusalFrom(() => unlockCheckout())
-
-    expect(error.status).toBe(409)
-  })
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -642,7 +539,7 @@ describe('subscription settlement', () => {
   it('activates the plan for one month', async () => {
     const checkout = await openCheckout(
       USER_ID,
-      { purpose: 'SUBSCRIPTION', planCode: 'PREMIUM_10' },
+      { purpose: 'SUBSCRIPTION', planCode: 'PREMIUM_5' },
       CONTEXT
     )
 
@@ -652,7 +549,7 @@ describe('subscription settlement', () => {
 
     const subscription = subscriptions()[0]!
     expect(subscription.status).toBe('ACTIVE')
-    expect(subscription.planId).toBe('plan-premium-10')
+    expect(subscription.planId).toBe('plan-premium-5')
     expect(subscription.paymentId).toBe(checkout.paymentId)
 
     // One month, by the same clamping arithmetic the metering window uses.
@@ -661,19 +558,8 @@ describe('subscription settlement', () => {
     expect(ahead).toBeLessThan(32 * 24 * 60 * 60 * 1_000)
 
     expect(result.grant?.kind).toBe('SUBSCRIPTION')
-    expect(result.grant?.planCode).toBe('PREMIUM_10')
+    expect(result.grant?.planCode).toBe('PREMIUM_5')
     expect(result.grant?.activeUntil).not.toBeNull()
   })
 
-  it('creates no ItineraryUnlock', async () => {
-    const checkout = await openCheckout(
-      USER_ID,
-      { purpose: 'SUBSCRIPTION', planCode: 'PREMIUM_10' },
-      CONTEXT
-    )
-
-    await completeMockPayment(USER_ID, checkout.paymentId, 'SUCCESS', CONTEXT)
-
-    expect(unlocks()).toHaveLength(0)
-  })
 })

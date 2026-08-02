@@ -3,7 +3,6 @@ import { resetEnvCache } from '@/lib/env'
 import { MAX_TRIP_DAYS } from '@/server/ai/schemas'
 import { clearSettingCache } from '@/server/settings/read'
 import {
-  DEFAULT_UNLOCK_PRICE_BDT,
   FREE_AI_PROMPTS_PER_PERIOD,
   anonymousActor,
   canGenerateDays,
@@ -45,11 +44,11 @@ import {
 
 const { mockDb } = vi.hoisted(() => ({
   mockDb: {
+    user: { findUnique: vi.fn() },
     subscription: { findFirst: vi.fn() },
     plan: { findUnique: vi.fn() },
     itinerary: { count: vi.fn(), findFirst: vi.fn(), updateMany: vi.fn() },
     usageCounter: { findUnique: vi.fn(), upsert: vi.fn(), updateMany: vi.fn() },
-    itineraryUnlock: { findUnique: vi.fn() },
     anonymousVisitor: { findUnique: vi.fn() },
     setting: { findUnique: vi.fn() },
     $transaction: vi.fn(),
@@ -77,18 +76,21 @@ const FREE_PLAN = {
   aiPromptsPerPeriod: FREE_AI_PROMPTS_PER_PERIOD as number | null,
 }
 
-const PREMIUM_10 = {
-  code: 'PREMIUM_10' as const,
-  name: 'Premium 10',
+const PREMIUM_5 = {
+  code: 'PREMIUM_5' as const,
+  name: 'Premium 5',
   maxItineraryDays: null as number | null,
   maxSavedItineraries: null as number | null,
+  // Deliberately not the production tier's 5/75. These are the numbers the
+  // assertions below are written against; a fixture that tracked the real plan
+  // would make every one of them break on the next repricing.
   itinerariesPerPeriod: 10 as number | null,
   aiPromptsPerPeriod: 150 as number | null,
 }
 
 /** A tier with no ceiling of any kind — the shape the null trap preys on. */
 const UNMETERED_PLAN = {
-  ...PREMIUM_10,
+  ...PREMIUM_5,
   code: 'PREMIUM_100' as const,
   name: 'Premium 100',
   itinerariesPerPeriod: null as number | null,
@@ -103,21 +105,22 @@ const PERIOD_END = new Date(Date.UTC(2026, 7, 1))
 /**
  * The plan shape `resolveEntitlement` reads.
  *
- * `code` is widened to string deliberately: pinning it to `typeof PREMIUM_10`
- * fixes the literal to that one tier, so any case exercising PREMIUM_100 or
- * UNLOCK_SINGLE fails to typecheck for a reason that has nothing to do with
- * what it is testing. The limits are what these cases are about.
+ * `code` is widened to string deliberately: pinning it to `typeof PREMIUM_5`
+ * fixes the literal to that one tier, so any case exercising another tier
+ * fails to typecheck for a reason that has nothing to do with what it is
+ * testing. The limits are what these cases are about.
  */
-type TestPlan = Omit<typeof PREMIUM_10, 'code'> & { code: string }
+type TestPlan = Omit<typeof PREMIUM_5, 'code'> & { code: string }
 
 interface WorldOptions {
   subscription?: { id: string; currentPeriodEnd: Date; plan: TestPlan } | null
   freePlan?: typeof FREE_PLAN | null
   savedCount?: number
   counter?: { itinerariesCreated: number; aiPromptsUsed: number } | null
-  unlock?: { id: string } | null
   visitor?: { promptsUsed: number } | null
   promptLimitSetting?: number | null
+  /** The per-account exemption from every ceiling. Defaults to a metered account. */
+  unlimited?: boolean
 }
 
 /** One place to describe the database each case is asking about. */
@@ -129,13 +132,13 @@ function world(options: WorldOptions = {}): void {
   mockDb.$transaction.mockImplementation(async (fn: (tx: typeof mockDb) => Promise<unknown>) =>
     fn(mockDb)
   )
+  mockDb.user.findUnique.mockResolvedValue({ unlimited: options.unlimited ?? false })
   mockDb.subscription.findFirst.mockResolvedValue(options.subscription ?? null)
   mockDb.plan.findUnique.mockResolvedValue(
     options.freePlan === undefined ? FREE_PLAN : options.freePlan
   )
   mockDb.itinerary.count.mockResolvedValue(options.savedCount ?? 0)
   mockDb.usageCounter.findUnique.mockResolvedValue(options.counter ?? null)
-  mockDb.itineraryUnlock.findUnique.mockResolvedValue(options.unlock ?? null)
   mockDb.anonymousVisitor.findUnique.mockResolvedValue(options.visitor ?? null)
 
   // Every settings read goes through one delegate; the unlock price and the
@@ -225,7 +228,7 @@ describe('resolveEntitlement', () => {
   })
 
   it('reads the AI prompt ceiling from the plan', async () => {
-    world({ subscription: { id: 'sub-1', currentPeriodEnd: PERIOD_END, plan: PREMIUM_10 } })
+    world({ subscription: { id: 'sub-1', currentPeriodEnd: PERIOD_END, plan: PREMIUM_5 } })
 
     const entitlement = await resolveEntitlement(USER_ID, NOW)
 
@@ -244,13 +247,13 @@ describe('resolveEntitlement', () => {
 
   it('uses the subscribed plan when one is live', async () => {
     world({
-      subscription: { id: 'sub-1', currentPeriodEnd: PERIOD_END, plan: PREMIUM_10 },
+      subscription: { id: 'sub-1', currentPeriodEnd: PERIOD_END, plan: PREMIUM_5 },
       counter: { itinerariesCreated: 4, aiPromptsUsed: 9 },
     })
 
     const entitlement = await resolveEntitlement(USER_ID, NOW)
 
-    expect(entitlement.planCode).toBe('PREMIUM_10')
+    expect(entitlement.planCode).toBe('PREMIUM_5')
     expect(entitlement.maxItineraryDays).toBeNull()
     expect(entitlement.itinerariesPerPeriod).toBe(10)
     expect(entitlement.subscriptionId).toBe('sub-1')
@@ -269,7 +272,7 @@ describe('resolveEntitlement', () => {
   })
 
   it('does not confuse a missing plan row with a plan that says unlimited', async () => {
-    world({ subscription: { id: 'sub-1', currentPeriodEnd: PERIOD_END, plan: PREMIUM_10 } })
+    world({ subscription: { id: 'sub-1', currentPeriodEnd: PERIOD_END, plan: PREMIUM_5 } })
 
     const entitlement = await resolveEntitlement(USER_ID, NOW)
 
@@ -305,6 +308,50 @@ describe('resolvePeriod', () => {
   })
 })
 
+// ─────────────────────────────────────────────────────────────────────────────
+// The per-account exemption
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('unlimited accounts', () => {
+  it('nulls every ceiling while leaving the plan alone', async () => {
+    world({ unlimited: true })
+
+    const entitlement = await resolveEntitlement(USER_ID, NOW)
+
+    // All four, not just the day cap. An exemption that lifted one limit and
+    // left another would be worse than none: the account would fail somewhere
+    // nobody thought to look.
+    expect(entitlement.maxItineraryDays).toBeNull()
+    expect(entitlement.maxSavedItineraries).toBeNull()
+    expect(entitlement.itinerariesPerPeriod).toBeNull()
+    expect(entitlement.aiPromptsPerPeriod).toBeNull()
+
+    // Still on FREE. The exemption lifts limits; it does not promote anyone,
+    // and reporting should keep seeing the tier the account actually holds.
+    expect(entitlement.planCode).toBe('FREE')
+  })
+
+  it('does not wall a FREE account at the two-day limit', async () => {
+    world({ unlimited: true })
+
+    const allowance = await canGenerateDays(userActor(USER_ID), ITINERARY_ID)
+
+    expect(allowance.maxDays).toBe(MAX_TRIP_DAYS)
+    expect(allowance.unlimited).toBe(true)
+    expect(allowance.refusal).toBeNull()
+  })
+
+  it('meters a normal account exactly as before', async () => {
+    // The guard against the exemption leaking: same world, flag off.
+    world({ unlimited: false })
+
+    const entitlement = await resolveEntitlement(USER_ID, NOW)
+
+    expect(entitlement.maxItineraryDays).toBe(2)
+    expect(entitlement.maxSavedItineraries).toBe(3)
+  })
+})
+
 describe('canGenerateDays', () => {
   it('caps a FREE account at two days and says why', async () => {
     const allowance = await canGenerateDays(userActor(USER_ID), ITINERARY_ID)
@@ -312,37 +359,11 @@ describe('canGenerateDays', () => {
     expect(allowance.maxDays).toBe(2)
     expect(allowance.unlimited).toBe(false)
     expect(allowance.refusal?.reason).toBe('FREE_DAY_LIMIT')
-    expect(allowance.refusal?.upgrade?.action).toBe('UNLOCK_ITINERARY')
-    expect(allowance.refusal?.upgrade?.itineraryId).toBe(ITINERARY_ID)
-    expect(allowance.refusal?.upgrade?.priceBdt).toBe(DEFAULT_UNLOCK_PRICE_BDT)
-  })
-
-  it('lifts the cap for an itinerary that has been unlocked', async () => {
-    world({ unlock: { id: 'unlock-1' } })
-
-    const allowance = await canGenerateDays(userActor(USER_ID), ITINERARY_ID)
-
-    expect(allowance.unlocked).toBe(true)
-    expect(allowance.maxDays).toBe(MAX_TRIP_DAYS)
-    expect(allowance.source).toBe('UNLOCK')
-    expect(allowance.refusal).toBeNull()
-  })
-
-  it('reads the unlock from ItineraryUnlock, never from a flag on the itinerary', async () => {
-    world({ unlock: { id: 'unlock-1' } })
-
-    await canGenerateDays(userActor(USER_ID), ITINERARY_ID)
-
-    // Itinerary.isFullyUnlocked is a denormalised cache; trusting it here would
-    // turn a stale write into a free upgrade.
-    expect(mockDb.itineraryUnlock.findUnique).toHaveBeenCalledWith({
-      where: { userId_itineraryId: { userId: USER_ID, itineraryId: ITINERARY_ID } },
-      select: { id: true },
-    })
+    expect(allowance.refusal?.upgrade?.action).toBe('SUBSCRIBE')
   })
 
   it('lets an uncapped subscription cover the whole trip', async () => {
-    world({ subscription: { id: 'sub-1', currentPeriodEnd: PERIOD_END, plan: PREMIUM_10 } })
+    world({ subscription: { id: 'sub-1', currentPeriodEnd: PERIOD_END, plan: PREMIUM_5 } })
 
     const allowance = await canGenerateDays(userActor(USER_ID), ITINERARY_ID)
 
@@ -357,16 +378,12 @@ describe('canGenerateDays', () => {
     expect(allowance.maxDays).toBe(0)
     expect(allowance.source).toBe('ANONYMOUS')
     expect(allowance.refusal?.upgrade?.action).toBe('SIGN_IN')
-    // No unlock lookup for somebody who cannot own an itinerary.
-    expect(mockDb.itineraryUnlock.findUnique).not.toHaveBeenCalled()
   })
 
   it('applies the plan cap when no itinerary exists yet', async () => {
     const allowance = await canGenerateDays(userActor(USER_ID))
 
     expect(allowance.maxDays).toBe(2)
-    // Nothing exists to have been unlocked, so nothing is looked up.
-    expect(mockDb.itineraryUnlock.findUnique).not.toHaveBeenCalled()
     expect(allowance.refusal?.upgrade?.action).toBe('SUBSCRIBE')
   })
 
@@ -414,7 +431,7 @@ describe('canSaveItinerary', () => {
 
   it('treats a null saved limit as unlimited, not as zero', async () => {
     world({
-      subscription: { id: 'sub-1', currentPeriodEnd: PERIOD_END, plan: PREMIUM_10 },
+      subscription: { id: 'sub-1', currentPeriodEnd: PERIOD_END, plan: PREMIUM_5 },
       savedCount: 250,
       counter: { itinerariesCreated: 0, aiPromptsUsed: 0 },
     })
@@ -429,7 +446,7 @@ describe('canSaveItinerary', () => {
 
   it('blocks a premium account that has spent its period allowance', async () => {
     world({
-      subscription: { id: 'sub-1', currentPeriodEnd: PERIOD_END, plan: PREMIUM_10 },
+      subscription: { id: 'sub-1', currentPeriodEnd: PERIOD_END, plan: PREMIUM_5 },
       counter: { itinerariesCreated: 10, aiPromptsUsed: 0 },
     })
 
@@ -583,7 +600,7 @@ describe('claimSaveSlot', () => {
 describe('claimItineraryCreation', () => {
   it('puts the period ceiling in the WHERE clause, not in a comparison', async () => {
     world({
-      subscription: { id: 'sub-1', currentPeriodEnd: PERIOD_END, plan: PREMIUM_10 },
+      subscription: { id: 'sub-1', currentPeriodEnd: PERIOD_END, plan: PREMIUM_5 },
       counter: { itinerariesCreated: 3, aiPromptsUsed: 20 },
     })
 
@@ -604,7 +621,7 @@ describe('claimItineraryCreation', () => {
 
   it('refuses when the claim affects no rows', async () => {
     world({
-      subscription: { id: 'sub-1', currentPeriodEnd: PERIOD_END, plan: PREMIUM_10 },
+      subscription: { id: 'sub-1', currentPeriodEnd: PERIOD_END, plan: PREMIUM_5 },
       counter: { itinerariesCreated: 10, aiPromptsUsed: 30 },
     })
     mockDb.usageCounter.updateMany.mockResolvedValue({ count: 0 })
@@ -612,7 +629,7 @@ describe('claimItineraryCreation', () => {
 
     const decision = await claimItineraryCreation(USER_ID, NOW)
 
-    // Zero rows affected is a refusal. This is the wall a PREMIUM_10 subscriber
+    // Zero rows affected is a refusal. This is the wall a PREMIUM_5 subscriber
     // never met: `canGenerateDays` only reads `maxItineraryDays`, every premium
     // tier seeds that null, and so the per-period allowance was enforced
     // nowhere that could actually produce an itinerary.
@@ -804,7 +821,7 @@ describe('canPrompt', () => {
 
   it('stops a premium account that has spent its month', async () => {
     world({
-      subscription: { id: 'sub-1', currentPeriodEnd: PERIOD_END, plan: PREMIUM_10 },
+      subscription: { id: 'sub-1', currentPeriodEnd: PERIOD_END, plan: PREMIUM_5 },
       counter: { itinerariesCreated: 10, aiPromptsUsed: 40 },
     })
 
@@ -817,7 +834,7 @@ describe('canPrompt', () => {
 
   it('reports whichever of the two ceilings binds first', async () => {
     world({
-      subscription: { id: 'sub-1', currentPeriodEnd: PERIOD_END, plan: PREMIUM_10 },
+      subscription: { id: 'sub-1', currentPeriodEnd: PERIOD_END, plan: PREMIUM_5 },
       counter: { itinerariesCreated: 8, aiPromptsUsed: 149 },
     })
 
@@ -911,7 +928,7 @@ describe('recordUsage', () => {
 describe('toPromptEntitlement', () => {
   it('reports an uncapped plan as the platform ceiling, not as "unlimited"', async () => {
     world({
-      subscription: { id: 'sub-1', currentPeriodEnd: PERIOD_END, plan: PREMIUM_10 },
+      subscription: { id: 'sub-1', currentPeriodEnd: PERIOD_END, plan: PREMIUM_5 },
       counter: { itinerariesCreated: 3, aiPromptsUsed: 0 },
     })
 

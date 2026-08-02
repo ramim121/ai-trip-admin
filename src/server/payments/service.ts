@@ -9,7 +9,6 @@ import { db } from '@/lib/db'
 import { recordAudit } from '@/server/audit/log'
 import { badRequest, conflict, notFound } from '@/server/http/errors'
 import { enforceRateLimit } from '@/server/http/rate-limit'
-import { isItineraryUnlocked, unlockPriceBdt } from '@/server/modules/entitlements/service'
 import { mockIdempotencyKey } from './mock'
 import type { PaymentIntent, SettlementOutcome } from './provider'
 import { activePaymentProvider, paymentProviderFor } from './registry'
@@ -89,65 +88,6 @@ export interface RequestContext {
  */
 async function resolveIntent(userId: string, body: CheckoutBody): Promise<PaymentIntent> {
   const idempotencyKey = mockIdempotencyKey()
-
-  if (body.purpose === PaymentPurpose.ITINERARY_UNLOCK) {
-    // Guaranteed present by `CheckoutBody`'s refinement. Re-checked so this
-    // function is correct read on its own, rather than correct only in company.
-    const itineraryId = body.itineraryId
-    if (itineraryId === undefined) {
-      throw badRequest('itineraryId is required when purpose is ITINERARY_UNLOCK.', [
-        { path: 'itineraryId', message: 'Required for an itinerary unlock.' },
-      ])
-    }
-
-    // Ownership in the WHERE clause. Somebody else's trip is indistinguishable
-    // from one that does not exist, which stops this endpoint being used to test
-    // whether an id is real.
-    const itinerary = await db.itinerary.findFirst({
-      where: { id: itineraryId, userId },
-      select: { id: true },
-    })
-
-    if (itinerary === null) throw notFound('That itinerary was not found.')
-
-    /*
-     * Refuse to sell the same trip twice.
-     *
-     * The settlement would survive it — `@@unique([userId, itineraryId])` stops
-     * a second grant — but surviving is not the standard. Taking another 200 BDT
-     * for something already owned is a refund conversation we should never have
-     * had, and it is cheap to prevent at the one moment the traveller is still
-     * deciding.
-     */
-    if (await isItineraryUnlocked(userId, itineraryId)) {
-      throw conflict('That itinerary is already unlocked in full.')
-    }
-
-    return {
-      userId,
-      purpose: PaymentPurpose.ITINERARY_UNLOCK,
-      // The settings row if ops has repriced it; the seeded 200 otherwise.
-      amountBdt: await unlockPriceBdt(),
-      itineraryId,
-      /*
-       * Null, and this is the load-bearing line of the whole module.
-       *
-       * There IS a plan called UNLOCK_SINGLE and it does carry the 200 BDT
-       * price, so attaching it here would look tidy. It would also produce a
-       * payment whose `planId` points at a Plan row — and the next person to
-       * write a settlement path, a reporting query or a renewal job would find a
-       * plan sitting there and treat the purchase as a subscription to it. One
-       * 200 BDT payment would quietly become a tier.
-       *
-       * The grant this purchase buys is the ItineraryUnlock row and nothing
-       * else. So the payment names an itinerary and no plan at all, and
-       * `grantItineraryUnlock` has nothing to reach for even if it wanted to.
-       */
-      planId: null,
-      bookingId: null,
-      idempotencyKey,
-    }
-  }
 
   if (body.purpose === PaymentPurpose.BOOKING) {
     const bookingId = body.bookingId

@@ -51,13 +51,6 @@ import { PAYMENT_SELECT, type PaymentRecord, type SettlementOutcome } from './pr
  */
 const SETTLEABLE_STATUSES = [PaymentStatus.INITIATED, PaymentStatus.PENDING] as const
 
-/** Postgres unique violation, as Prisma reports it. */
-const UNIQUE_VIOLATION = 'P2002'
-
-function isUniqueViolation(e: unknown): boolean {
-  return e instanceof Prisma.PrismaClientKnownRequestError && e.code === UNIQUE_VIOLATION
-}
-
 /**
  * What the payment actually bought, as the traveller should be told.
  *
@@ -68,12 +61,12 @@ function isUniqueViolation(e: unknown): boolean {
  * retry.
  */
 export interface EntitlementGrant {
-  readonly kind: Extract<PaymentPurpose, 'ITINERARY_UNLOCK' | 'SUBSCRIPTION'>
+  readonly kind: Extract<PaymentPurpose, 'SUBSCRIPTION'>
   readonly itineraryId: string | null
   readonly itineraryTitle: string | null
   readonly planCode: PlanCode | null
   readonly planName: string | null
-  /** When a subscription's period ends. Null for a one-off unlock, which never expires. */
+  /** When the subscription period ends. */
   readonly activeUntil: Date | null
 }
 
@@ -227,9 +220,6 @@ async function grant(tx: TransactionClient, payment: SettlingPayment, now: Date)
   }
 
   switch (payment.purpose) {
-    case PaymentPurpose.ITINERARY_UNLOCK:
-      return grantItineraryUnlock(tx, payment, payment.userId)
-
     case PaymentPurpose.SUBSCRIPTION:
       return grantSubscription(tx, payment, payment.userId, now)
 
@@ -249,71 +239,6 @@ async function grant(tx: TransactionClient, payment: SettlingPayment, now: Date)
       await confirmBooking(tx, payment.bookingId, now)
       return
   }
-}
-
-/**
- * The 200 BDT one-off: the full length of ONE itinerary, forever.
- *
- * Note what is NOT here: any reference to the UNLOCK_SINGLE plan. That row
- * exists only so the price has somewhere to live, and turning it into a
- * Subscription is the most expensive mistake this file could make —
- * `unlockOffer()` publishes `planCode: 'UNLOCK_SINGLE'` to every client, so a
- * settlement doing the obvious thing with the offer it was handed would convert
- * one 200 BDT purchase into a permanent account-wide tier. The entitlement
- * service already excludes `interval = NONE` from every subscription lookup, and
- * `grantSubscription` below refuses such a plan outright; this function simply
- * never reaches for a plan at all, which is the cheapest of the three locks and
- * the only one that cannot be forgotten.
- */
-async function grantItineraryUnlock(
-  tx: TransactionClient,
-  payment: SettlingPayment,
-  userId: string
-): Promise<void> {
-  const itineraryId = payment.itineraryId
-
-  // The column is nullable for BOOKING's sake. An ITINERARY_UNLOCK without one
-  // is a checkout bug, and taking money for a grant we cannot deliver is worse
-  // than failing the settlement and leaving the payment un-settled for ops.
-  if (itineraryId === null) {
-    throw internal('That payment does not name an itinerary to unlock.')
-  }
-
-  try {
-    await tx.itineraryUnlock.create({
-      data: { userId, itineraryId, paymentId: payment.id },
-    })
-  } catch (e) {
-    /*
-     * `@@unique([userId, itineraryId])` — they already own this trip.
-     *
-     * Reachable when two DIFFERENT payments for the same itinerary settle
-     * together; the status predicate upstream only serialises settlements of one
-     * payment. Checkout refuses to open a second unlock for an itinerary already
-     * unlocked, so this is the narrow race rather than the common path.
-     *
-     * Swallowed rather than propagated: the traveller has the entitlement they
-     * paid for, which is the outcome that matters, and rolling back would leave
-     * a paid-for grant undelivered. The duplicate shows up to ops as a SUCCEEDED
-     * payment with no unlock attached — a refund conversation, not a 500 in the
-     * middle of a checkout.
-     */
-    if (!isUniqueViolation(e)) throw e
-  }
-
-  /*
-   * Refresh the denormalised flag the list views read.
-   *
-   * `ItineraryUnlock` remains the record of truth — `isItineraryUnlocked()`
-   * reads the row and never this column — so this is a cache being brought into
-   * line inside the same transaction that created the thing it caches. Scoped on
-   * `userId` as well as id, so a payment can only ever mark the buyer's own
-   * itinerary.
-   */
-  await tx.itinerary.updateMany({
-    where: { id: itineraryId, userId },
-    data: { isFullyUnlocked: true },
-  })
 }
 
 /**
@@ -371,30 +296,18 @@ async function grantSubscription(
  * first response with a grant and a second without one.
  */
 export async function describeGrant(paymentId: string): Promise<EntitlementGrant | null> {
-  const [unlock, subscription] = await Promise.all([
-    db.itineraryUnlock.findUnique({
-      where: { paymentId },
-      select: { itineraryId: true, itinerary: { select: { title: true } } },
-    }),
-    db.subscription.findUnique({
-      where: { paymentId },
-      select: {
-        currentPeriodEnd: true,
-        plan: { select: { code: true, name: true } },
-      },
-    }),
-  ])
-
-  if (unlock !== null) {
-    return {
-      kind: PaymentPurpose.ITINERARY_UNLOCK,
-      itineraryId: unlock.itineraryId,
-      itineraryTitle: unlock.itinerary.title,
-      planCode: null,
-      planName: null,
-      activeUntil: null,
-    }
-  }
+  // One grant shape left, so no Promise.all and no precedence question. When
+  // the one-off unlock existed this read both grant tables and answered with
+  // whichever was present; there is now exactly one kind of thing a payment can
+  // grant, and a BOOKING grants none of them — its confirmation lives on the
+  // booking row, which is why null is a normal answer here rather than a fault.
+  const subscription = await db.subscription.findUnique({
+    where: { paymentId },
+    select: {
+      currentPeriodEnd: true,
+      plan: { select: { code: true, name: true } },
+    },
+  })
 
   if (subscription !== null) {
     return {

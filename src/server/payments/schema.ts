@@ -44,12 +44,12 @@ import type { EntitlementGrant } from './settlement'
  * these two lists a compile error rather than a silent gap.
  */
 export const CheckoutPurposeSchema: z.ZodType<CheckoutPurpose> = z
-  .enum([PaymentPurpose.ITINERARY_UNLOCK, PaymentPurpose.SUBSCRIPTION, PaymentPurpose.BOOKING])
+  .enum([PaymentPurpose.SUBSCRIPTION, PaymentPurpose.BOOKING])
   .meta({
     id: 'CheckoutPurpose',
     description:
-      'What is being bought. `ITINERARY_UNLOCK` is the one-off that opens a single trip in full, ' +
-      'forever; `SUBSCRIPTION` is a monthly tier. They are not interchangeable — see `planCode`.',
+      'What is being bought. `SUBSCRIPTION` is a monthly tier; `BOOKING` is a seat on a dated ' +
+      'departure. They are not interchangeable — see `planCode` and `bookingId`.',
   })
 
 export const CheckoutBody = z
@@ -84,14 +84,6 @@ export const CheckoutBody = z
    * highlight, instead of as prose in a message.
    */
   .superRefine((body, ctx) => {
-    if (body.purpose === PaymentPurpose.ITINERARY_UNLOCK && body.itineraryId === undefined) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['itineraryId'],
-        message: 'itineraryId is required when purpose is ITINERARY_UNLOCK.',
-      })
-    }
-
     if (body.purpose === PaymentPurpose.BOOKING && body.bookingId === undefined) {
       ctx.addIssue({
         code: 'custom',
@@ -211,7 +203,7 @@ export type CheckoutResponse = z.infer<typeof CheckoutResponse>
 
 export const PaymentGrant = z
   .object({
-    kind: z.enum([PaymentPurpose.ITINERARY_UNLOCK, PaymentPurpose.SUBSCRIPTION]),
+    kind: z.enum([PaymentPurpose.SUBSCRIPTION]),
     itineraryId: z.uuid().nullable(),
     itineraryTitle: z.string().nullable(),
     planCode: z.enum(PlanCode).nullable(),

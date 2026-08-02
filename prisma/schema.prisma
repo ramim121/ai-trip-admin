@@ -55,6 +55,21 @@ model User {
   emailVerifiedAt DateTime?
   lastLoginAt     DateTime?
 
+  /// Exempt from every entitlement ceiling: days per itinerary, saved
+  /// itineraries, itineraries per period, AI prompts per period.
+  ///
+  /// A COLUMN RATHER THAN AN ENV ALLOWLIST, and the difference matters. A list
+  /// of privileged addresses in the environment is invisible to the console,
+  /// needs a redeploy to change, and would quietly re-grant privilege to
+  /// whoever later registers one of those addresses. A row is auditable,
+  /// revocable without a deploy, and belongs to exactly one account.
+  ///
+  /// THIS IS NOT AN ADMIN FLAG. It grants nothing staff-only — staff live in a
+  /// separate table signed with a separate JWT secret, and that separation is
+  /// the thing stopping privilege being gained by mutating a user row. All this
+  /// removes is metering.
+  unlimited Boolean @default(false)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -63,7 +78,6 @@ model User {
   emailVerifications EmailVerification[]
 
   subscriptions    Subscription[]
-  itineraryUnlocks ItineraryUnlock[]
   usageCounters    UsageCounter[]
   payments         Payment[]
   plannerSessions  PlannerSession[]
@@ -319,12 +333,17 @@ model AuditLog {
 // most restrictive one.
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// The whole price list. Three tiers, and deliberately no fourth.
+///
+/// UNLOCK_SINGLE — a 200 BDT one-off that opened a single itinerary forever —
+/// was removed rather than hidden. It was the only non-subscription product,
+/// so it carried its own payment purpose, its own grant table and its own
+/// branch in settlement: a second commerce path maintained forever for one
+/// price point. Nothing had been sold through it, so it left cleanly.
 enum PlanCode {
   FREE // logged in, 2-day itineraries, 3 saved
-  UNLOCK_SINGLE // 200 BDT, one itinerary, forever
-  PREMIUM_10
-  PREMIUM_50
-  PREMIUM_100
+  PREMIUM_5 // 500 BDT/month, 5 itineraries a month
+  PREMIUM_100 // 5000 BDT/month, 100 itineraries a month
 }
 
 enum BillingInterval {
@@ -353,7 +372,6 @@ enum PaymentProvider {
 }
 
 enum PaymentPurpose {
-  ITINERARY_UNLOCK
   SUBSCRIPTION
   BOOKING
 }
@@ -441,29 +459,6 @@ model Subscription {
   @@map("subscriptions")
 }
 
-/// The 200 BDT one-off: full length of ONE itinerary, forever. Deliberately a
-/// row rather than a flag, so the grant survives independently of the
-/// itinerary's own `isFullyUnlocked` denormalisation and can be audited.
-model ItineraryUnlock {
-  id String @id @default(uuid(7)) @db.Uuid
-
-  userId String @db.Uuid
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  itineraryId String    @db.Uuid
-  itinerary   Itinerary @relation(fields: [itineraryId], references: [id], onDelete: Cascade)
-
-  paymentId String?  @unique @db.Uuid
-  payment   Payment? @relation(fields: [paymentId], references: [id], onDelete: SetNull)
-
-  unlockedAt DateTime @default(now())
-
-  /// Buying the same itinerary twice is a bug, not a second grant.
-  @@unique([userId, itineraryId])
-  @@index([itineraryId])
-  @@map("itinerary_unlocks")
-}
-
 /// Consumption within one billing period. Kept separate from Subscription so
 /// that free users — who have no subscription row — are still metered, and so
 /// that history survives a plan change.
@@ -507,10 +502,10 @@ model Payment {
   /// every real gateway callback arrives in, since the gateway knows our
   /// reference and not our domain. So the target of the purchase has to be on
   /// the payment itself, decided when the amount was decided, or a settlement
-  /// has no way to know which itinerary it just unlocked.
+  /// has no way to know what it just paid for.
   ///
-  /// The grant rows point back here (`ItineraryUnlock.paymentId`,
-  /// `Subscription.paymentId`), so after settlement the link exists in both
+  /// The grant row points back here (`Subscription.paymentId`), so after
+  /// settlement the link exists in both
   /// directions: this column records what was BOUGHT, those record what was
   /// GRANTED, and a mismatch between them is detectable rather than invisible.
   ///
@@ -545,8 +540,7 @@ model Payment {
   /// This is a revenue-integrity column, not a debugging convenience. A mock
   /// settlement grants a real entitlement, so its Payment row is
   /// indistinguishable from a paid one in every other field: same provider
-  /// mechanics, same amount, same SUCCEEDED status, same ItineraryUnlock behind
-  /// it. Without a flag on the row itself, a revenue query written six months
+  /// mechanics, same amount, same SUCCEEDED status, same grant behind it. Without a flag on the row itself, a revenue query written six months
   /// from now would sum sandbox traffic as income, and no amount of care about
   /// which provider values "look real" would catch it — MANUAL_BANK is also
   /// settled by hand and is genuinely income.
@@ -573,7 +567,6 @@ model Payment {
   updatedAt DateTime  @updatedAt
 
   subscription Subscription?
-  unlock       ItineraryUnlock?
 
   @@index([userId, status])
   @@index([provider, providerRef])
@@ -1069,20 +1062,14 @@ model Itinerary {
 
   status ItineraryStatus @default(DRAFT)
 
-  /// Denormalised from ItineraryUnlock / an active subscription so the list
-  /// view does not join per row. ItineraryUnlock remains the record of truth;
-  /// this is a cache and must be recomputed, never edited by hand.
-  isFullyUnlocked Boolean @default(false)
-
   coverImageUrl String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   days     ItineraryDay[]
-  unlocks  ItineraryUnlock[]
-  /// Checkouts opened against this trip. Distinct from `unlocks`: a payment
-  /// that failed or was abandoned appears here and never there.
+  /// Checkouts opened against this trip — a payment that failed or was
+  /// abandoned appears here too.
   payments Payment[]
 
   @@index([userId, status])

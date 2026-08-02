@@ -3295,9 +3295,7 @@
             "type": "string",
             "enum": [
               "FREE",
-              "UNLOCK_SINGLE",
-              "PREMIUM_10",
-              "PREMIUM_50",
+              "PREMIUM_5",
               "PREMIUM_100"
             ]
           },
@@ -3315,11 +3313,10 @@
       "CheckoutPurpose": {
         "type": "string",
         "enum": [
-          "ITINERARY_UNLOCK",
           "SUBSCRIPTION",
           "BOOKING"
         ],
-        "description": "What is being bought. `ITINERARY_UNLOCK` is the one-off that opens a single trip in full, forever; `SUBSCRIPTION` is a monthly tier. They are not interchangeable — see `planCode`."
+        "description": "What is being bought. `SUBSCRIPTION` is a monthly tier; `BOOKING` is a seat on a dated departure. They are not interchangeable — see `planCode` and `bookingId`."
       },
       "CheckoutResponse": {
         "type": "object",
@@ -3738,9 +3735,7 @@
             "type": "string",
             "enum": [
               "FREE",
-              "UNLOCK_SINGLE",
-              "PREMIUM_10",
-              "PREMIUM_50",
+              "PREMIUM_5",
               "PREMIUM_100"
             ]
           },
@@ -4615,7 +4610,6 @@
           "purpose": {
             "type": "string",
             "enum": [
-              "ITINERARY_UNLOCK",
               "SUBSCRIPTION",
               "BOOKING"
             ]
@@ -4678,9 +4672,7 @@
                 "type": "string",
                 "enum": [
                   "FREE",
-                  "UNLOCK_SINGLE",
-                  "PREMIUM_10",
-                  "PREMIUM_50",
+                  "PREMIUM_5",
                   "PREMIUM_100"
                 ]
               },
@@ -4741,7 +4733,6 @@
           "kind": {
             "type": "string",
             "enum": [
-              "ITINERARY_UNLOCK",
               "SUBSCRIPTION"
             ]
           },
@@ -4773,9 +4764,7 @@
                 "type": "string",
                 "enum": [
                   "FREE",
-                  "UNLOCK_SINGLE",
-                  "PREMIUM_10",
-                  "PREMIUM_50",
+                  "PREMIUM_5",
                   "PREMIUM_100"
                 ]
               },
@@ -5175,9 +5164,7 @@
             "type": "string",
             "enum": [
               "FREE",
-              "UNLOCK_SINGLE",
-              "PREMIUM_10",
-              "PREMIUM_50",
+              "PREMIUM_5",
               "PREMIUM_100"
             ]
           },
@@ -8493,9 +8480,7 @@
                 "type": "string",
                 "enum": [
                   "FREE",
-                  "UNLOCK_SINGLE",
-                  "PREMIUM_10",
-                  "PREMIUM_50",
+                  "PREMIUM_5",
                   "PREMIUM_100"
                 ]
               },

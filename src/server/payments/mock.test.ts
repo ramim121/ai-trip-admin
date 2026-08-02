@@ -109,15 +109,15 @@ function expectNamesBothFlags(error: ApiError): void {
 
 const PAYMENT_ID = '019373d4-4a1b-7c3e-9f00-2222bbbb0002'
 const USER_ID = '019373d4-4a1b-7c3e-9f00-1111aaaa0001'
-const ITINERARY_ID = '019373d4-4a1b-7c3e-9f00-6666ffff0006'
+const PLAN_ID = '019373d4-4a1b-7c3e-9f00-7777aaaa0007'
 
 function intent() {
   return {
     userId: USER_ID,
-    purpose: 'ITINERARY_UNLOCK' as const,
-    amountBdt: 200,
-    itineraryId: ITINERARY_ID,
-    planId: null,
+    purpose: 'SUBSCRIPTION' as const,
+    amountBdt: 500,
+    itineraryId: null,
+    planId: PLAN_ID,
     bookingId: null,
     idempotencyKey: 'mock_test_key',
   }

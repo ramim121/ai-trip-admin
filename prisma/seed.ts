@@ -415,63 +415,29 @@ const PLANS: PlanSeed[] = [
     sortOrder: 0,
   },
   {
-    code: PlanCode.UNLOCK_SINGLE,
-    name: 'Full itinerary unlock',
-    description:
-      'A one-off 200 BDT purchase that reveals the full length of one specific itinerary, permanently. Not a tier anyone sits on — buying it records an ItineraryUnlock against that itinerary and nothing else changes.',
-    priceBdt: 200,
-    interval: BillingInterval.NONE,
-    // FREE's numbers, deliberately, and not the nulls this row used to carry.
-    // What the 200 BDT buys is the ItineraryUnlock row against one itinerary;
-    // none of the grant is carried by these columns. Leaving them null meant a
-    // payment handler doing the obvious thing on settlement — create a
-    // Subscription from upgrade.planCode, which unlockOffer publishes to every
-    // client — would have converted one 200 BDT purchase into a permanent
-    // account-wide grant of unlimited days AND unlimited saves. The query in
-    // service.ts now excludes interval = NONE from every subscription lookup;
-    // these values are the second lock on the same door.
-    maxSavedItineraries: 3,
-    maxItineraryDays: 2,
-    itinerariesPerPeriod: null,
-    aiPromptsPerPeriod: FREE_AI_PROMPTS,
+    code: PlanCode.PREMIUM_5,
+    name: 'Premium 5',
+    description: 'Five full-length itineraries a month, no day limit, unlimited saved trips.',
+    priceBdt: 500,
+    interval: BillingInterval.MONTHLY,
+    maxSavedItineraries: null,
+    maxItineraryDays: null,
+    itinerariesPerPeriod: 5,
+    aiPromptsPerPeriod: 5 * AI_PROMPTS_PER_INCLUDED_ITINERARY,
     sortOrder: 1,
-  },
-  {
-    code: PlanCode.PREMIUM_10,
-    name: 'Premium 10',
-    description: 'Ten full-length itineraries a month, no day limit, unlimited saved trips.',
-    priceBdt: 990,
-    interval: BillingInterval.MONTHLY,
-    maxSavedItineraries: null,
-    maxItineraryDays: null,
-    itinerariesPerPeriod: 10,
-    aiPromptsPerPeriod: 10 * AI_PROMPTS_PER_INCLUDED_ITINERARY,
-    sortOrder: 2,
-  },
-  {
-    code: PlanCode.PREMIUM_50,
-    name: 'Premium 50',
-    description: 'Fifty full-length itineraries a month. Sized for agents and frequent planners.',
-    priceBdt: 2900,
-    interval: BillingInterval.MONTHLY,
-    maxSavedItineraries: null,
-    maxItineraryDays: null,
-    itinerariesPerPeriod: 50,
-    aiPromptsPerPeriod: 50 * AI_PROMPTS_PER_INCLUDED_ITINERARY,
-    sortOrder: 3,
   },
   {
     code: PlanCode.PREMIUM_100,
     name: 'Premium 100',
     description:
       'A hundred full-length itineraries a month, for travel desks planning on behalf of clients.',
-    priceBdt: 4900,
+    priceBdt: 5000,
     interval: BillingInterval.MONTHLY,
     maxSavedItineraries: null,
     maxItineraryDays: null,
     itinerariesPerPeriod: 100,
     aiPromptsPerPeriod: 100 * AI_PROMPTS_PER_INCLUDED_ITINERARY,
-    sortOrder: 4,
+    sortOrder: 2,
   },
 ]
 
