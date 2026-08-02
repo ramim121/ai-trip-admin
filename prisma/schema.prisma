@@ -84,6 +84,8 @@ model User {
   itineraries      Itinerary[]
   /// Anonymous visitors that later became this account.
   convertedFrom    AnonymousVisitor[]
+  /// Quotes requested. SetNull, so the commercial record survives deletion.
+  quotes           Quote[]
 
   /// Detached rather than cascaded — see each model for why. Spend survives a
   /// deleted account, a poll's totals must not silently drop, and an interest
@@ -1068,6 +1070,8 @@ model Itinerary {
   updatedAt DateTime @updatedAt
 
   days     ItineraryDay[]
+  /// Quotation conversations about this trip.
+  quotes   Quote[]
   /// Checkouts opened against this trip — a payment that failed or was
   /// abandoned appears here too.
   payments Payment[]
@@ -2214,4 +2218,116 @@ model CouponRedemption {
 
   @@index([couponId, userId])
   @@map("coupon_redemptions")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Quotations
+//
+// A traveller finishes an itinerary and asks what it would actually cost. Ops
+// prices it — real hotel names, real transport, real numbers — and sends it
+// back. The traveller accepts, or asks for changes and ops sends a new version.
+//
+// WHY REVISIONS RATHER THAN AN EDITABLE QUOTE. A price somebody has been shown
+// is a thing they may have decided on. Editing it in place would mean the row
+// that said 84,000 taka yesterday says 96,000 today with nothing recording that
+// it moved, and no way to answer "what was I quoted?" — which is the entirety of
+// what a pricing dispute consists of. Each version is written once and frozen
+// the moment it is sent.
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum QuoteStatus {
+  REQUESTED // traveller asked; nobody has priced it yet
+  PRICED // ops has drafted numbers but not sent them
+  SENT // the traveller can see it
+  ACCEPTED
+  DECLINED
+  WITHDRAWN // ops pulled it; the row survives
+  EXPIRED
+}
+
+model Quote {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  /// Nullable and SetNull, exactly like `Payment.userId`.
+  ///
+  /// A quote is a commercial record: what was offered, for how much, and when.
+  /// Cascading from the account would let somebody delete the evidence of a
+  /// price they were given, which is the record a dispute is made of.
+  userId String? @db.Uuid
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  /// Nullable for the same reason. A traveller may delete a trip they have
+  /// already been quoted for; the quote outlives it.
+  itineraryId String?    @db.Uuid
+  itinerary   Itinerary? @relation(fields: [itineraryId], references: [id], onDelete: SetNull)
+
+  status QuoteStatus @default(REQUESTED)
+
+  /// What the traveller said when asking. Their words, not a form's.
+  travellerNote String?
+
+  requestedAt DateTime  @default(now())
+  /// When it was accepted or declined. Null while it is still open.
+  decidedAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  revisions QuoteRevision[]
+
+  /// One OPEN quote per itinerary — a second request for the same trip is the
+  /// same conversation, not a new one. Enforced as a partial unique index in
+  /// the migration, because Prisma cannot express `WHERE status IN (...)`.
+  @@index([status, requestedAt])
+  @@index([userId])
+  @@map("quotes")
+}
+
+model QuoteRevision {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  quoteId String @db.Uuid
+  quote   Quote  @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+
+  /// 1-based. Version 2 exists because the traveller asked for changes.
+  version Int
+
+  /// Whole taka, like every other amount here. The CHECK in the migration is
+  /// what makes `total = subtotal - discount` a guarantee rather than a
+  /// convention every write site has to remember.
+  subtotalBdt Int
+  discountBdt Int @default(0)
+  totalBdt    Int
+
+  /// What the price does and does not cover, as ops wrote it.
+  inclusions String[]
+  exclusions String[]
+  terms      String?
+
+  /// A note to the traveller alongside the numbers.
+  travellerMessage String?
+
+  /// After this the price is no longer being held.
+  validUntil DateTime?
+
+  /// When the traveller was shown this version.
+  ///
+  /// NULL MEANS DRAFT, AND IT IS THE WHOLE INTEGRITY MECHANISM. Every write to
+  /// a revision carries `sentAt: null` in its WHERE clause, so a version
+  /// somebody has already been shown cannot be edited by any code path — the
+  /// update simply matches no row. Changing a sent price means writing a new
+  /// version, which is what the unique on (quoteId, version) is for. A database
+  /// trigger enforces the same rule, because a predicate somebody forgets to
+  /// write is not a rule.
+  sentAt DateTime?
+
+  /// Which admin priced it. Attribution, never authorisation.
+  pricedByAdminId String? @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([quoteId, version])
+  @@index([quoteId, sentAt])
+  @@map("quote_revisions")
 }
