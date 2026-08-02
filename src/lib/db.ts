@@ -75,12 +75,43 @@ function connectionFor(rawUrl: string): {
   return { connectionString, ssl: { rejectUnauthorized: false } }
 }
 
+/**
+ * How many Postgres connections ONE instance of this process may hold.
+ *
+ * `pg` defaults to 10, which is right for a long-lived server handling many
+ * requests at once and catastrophically wrong for a serverless function. A
+ * Vercel function instance serves ONE request at a time, so nine of those ten
+ * connections can never be used — but they are still claimed, and claimed
+ * against a budget shared with every other warm instance.
+ *
+ * That arithmetic is what took production down on the first deploy: Supabase's
+ * pooler in session mode allows 15 clients on the free tier, so a couple of warm
+ * instances at the default exhausted it and every query afterwards failed with
+ * `(EMAXCONNSESSION) max clients reached in session mode`.
+ *
+ * One connection per instance is therefore not a tuning choice, it is the shape
+ * of the runtime. Concurrency comes from Vercel running more instances, and each
+ * one needs exactly the single connection it is using.
+ *
+ * `idleTimeoutMillis` is short for the same reason: an instance frozen between
+ * invocations should not sit on a connection somebody else could be using.
+ * `connectionTimeoutMillis` makes exhaustion surface as a fast, legible error
+ * rather than a request that hangs until the platform kills it.
+ */
+const POOL_LIMITS = {
+  max: 1,
+  idleTimeoutMillis: 10_000,
+  connectionTimeoutMillis: 10_000,
+} as const
+
 function createClient(): PrismaClient {
   const config = env()
   const { connectionString, ssl } = connectionFor(config.DATABASE_URL)
 
   return new PrismaClient({
-    adapter: new PrismaPg({ connectionString, ...(ssl ? { ssl } : {}) }),
+    // `ssl` is spread last so `connectionFor`'s decision still wins — see the
+    // note there on why sslmode is stripped from the string first.
+    adapter: new PrismaPg({ connectionString, ...POOL_LIMITS, ...(ssl ? { ssl } : {}) }),
     log: config.NODE_ENV === 'development' ? ['warn', 'error'] : ['error'],
   })
 }

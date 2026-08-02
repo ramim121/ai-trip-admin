@@ -66,3 +66,6 @@ next-env.d.ts
 # source tree beside it. Committing it would put a second, staler copy of the
 # codebase in the repo and produce an enormous diff on every run.
 /graphify-out/
+
+.vercel
+.env*
