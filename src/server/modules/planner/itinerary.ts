@@ -936,15 +936,42 @@ export async function regenerateDay(
  * For use after an unlock or an upgrade. Adds only the days that are missing;
  * days that already exist are left exactly as the traveller left them.
  */
+export interface ExtendResult {
+  itinerary: ItineraryView
+  /** Day numbers this call planned. Empty when there was nothing to do. */
+  addedDays: number[]
+  /**
+   * Days inside the trip that this call could NOT reach, because the
+   * entitlement stops short of the trip's length.
+   *
+   * THE FIELD EXISTS SO THE BUTTON CANNOT LIE. Without it, a FREE traveller
+   * with a 2-day allowance and a 7-day trip presses "plan the remaining days",
+   * every day within reach already exists, the loop skips all of them, and the
+   * call returns a perfectly successful response having done nothing at all.
+   * The client needs to tell "there was nothing left to plan" apart from "there
+   * is plenty left and your plan will not reach it", and only the server knows
+   * which.
+   */
+  unreachableDays: number[]
+  allowance: DayAllowance
+}
+
 export async function extendToEntitlement(
   userId: string,
   itineraryId: string
-): Promise<ItineraryView> {
+): Promise<ExtendResult> {
   const itinerary = await loadOwnedItinerary(userId, itineraryId)
   const allowance = await canGenerateDays(userActor(userId), itineraryId)
 
   const target = Math.min(itinerary.totalDays, allowance.maxDays)
   const existing = new Set(itinerary.days.map((day) => day.dayNumber))
+  const addedDays: number[] = []
+
+  // Everything the trip asked for that the allowance will not stretch to.
+  const unreachableDays: number[] = []
+  for (let dayNumber = target + 1; dayNumber <= itinerary.totalDays; dayNumber += 1) {
+    unreachableDays.push(dayNumber)
+  }
 
   const used = itinerary.days.flatMap((day) =>
     day.blocks.flatMap((block) => (block.activityId === null ? [] : [block.activityId]))
@@ -965,9 +992,15 @@ export async function extendToEntitlement(
       excludeActivityIds: used,
     })
     used.push(...placed)
+    addedDays.push(dayNumber)
   }
 
-  return getItinerary(userId, itineraryId)
+  return {
+    itinerary: await getItinerary(userId, itineraryId),
+    addedDays,
+    unreachableDays,
+    allowance,
+  }
 }
 
 // ── Itinerary-level edits ───────────────────────────────────────────────────

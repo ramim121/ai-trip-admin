@@ -359,6 +359,25 @@ export const RegenerateDayResponse = z
   .meta({ id: 'RegenerateDayResponse' })
 export type RegenerateDayResponse = z.infer<typeof RegenerateDayResponse>
 
+export const ExtendItineraryResponse = z
+  .object({
+    itinerary: Itinerary,
+    allowance: DayAllowance,
+    addedDays: z
+      .array(DayNumber)
+      .describe('Day numbers this call planned. Empty when there was nothing to add.'),
+    unreachableDays: z
+      .array(DayNumber)
+      .describe(
+        'Days inside the trip the entitlement will not stretch to. An empty `addedDays` ' +
+          'alongside a populated `unreachableDays` means a wall was hit, NOT that the trip is ' +
+          'complete — the two are indistinguishable without this field, and telling a traveller ' +
+          '"all done" while four days are missing is the failure it exists to prevent.'
+      ),
+  })
+  .meta({ id: 'ExtendItineraryResponse' })
+export type ExtendItineraryResponse = z.infer<typeof ExtendItineraryResponse>
+
 // ── Itinerary edits ─────────────────────────────────────────────────────────
 
 export const UpdateItineraryBody = z

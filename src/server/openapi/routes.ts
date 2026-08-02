@@ -54,6 +54,7 @@ import {
   CreateBlockBody,
   CreatePlannerSessionBody,
   Itinerary,
+  ExtendItineraryResponse,
   ItineraryListQuery,
   ItineraryListResponse,
   MaterialiseItineraryBody,
@@ -872,6 +873,41 @@ registerRoute({
     401: errorResponse('Authentication is required.'),
     403: errorResponse(ENTITLEMENT_REFUSAL),
     404: errorResponse(`${NOT_MY_ITINERARY} Also returned when the itinerary has no such day.`),
+    500: errorResponse(UNEXPECTED),
+  },
+})
+
+registerRoute({
+  method: 'post',
+  path: '/api/v1/itineraries/{id}/extend',
+  operationId: 'extendItinerary',
+  summary: 'Plan the days of the trip that have no plan yet',
+  description:
+    'For a traveller with a seven-day trip, two days built, who wants the other five. Adds ONLY ' +
+    'the missing days: every day that already exists is left exactly as they left it, blocks and ' +
+    'all. Additive by construction, so pressing it twice cannot overwrite anything.\n\n' +
+    'Activities already used elsewhere in the trip are preferred against, so a new day is not a ' +
+    'copy of an old one. Once the destination’s catalogue is exhausted the planner reuses its ' +
+    'best fits rather than creating an empty day — a repeated activity is a worse plan than a ' +
+    'fresh one and a far better plan than a blank page.\n\n' +
+    '`addedDays` can be empty for two very different reasons and the response separates them. ' +
+    'Empty alongside an empty `unreachableDays` means the trip is already fully planned. Empty ' +
+    'alongside a POPULATED `unreachableDays` means the entitlement stops short of the trip’s ' +
+    'length — every day within reach already existed, so nothing was added, and ' +
+    '`allowance.refusal` carries the offer that would lift the wall. Reporting that second case ' +
+    'as a success would tell somebody their trip was complete while four days of it were ' +
+    'missing.\n\n' +
+    'Deterministic and catalogue-only, exactly like day regeneration: it costs no AI budget.',
+  tags: ITINERARIES,
+  security: 'user',
+  responses: {
+    200: {
+      schema: ExtendItineraryResponse,
+      description: 'The itinerary, which days were added, and which remain out of reach.',
+    },
+    401: errorResponse('Authentication is required.'),
+    404: errorResponse(NOT_MY_ITINERARY),
+    429: errorResponse('Too many extends from this account in the last hour.'),
     500: errorResponse(UNEXPECTED),
   },
 })

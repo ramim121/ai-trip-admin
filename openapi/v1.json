@@ -1864,6 +1864,83 @@
         }
       }
     },
+    "/api/v1/itineraries/{id}/extend": {
+      "post": {
+        "operationId": "extendItinerary",
+        "summary": "Plan the days of the trip that have no plan yet",
+        "description": "For a traveller with a seven-day trip, two days built, who wants the other five. Adds ONLY the missing days: every day that already exists is left exactly as they left it, blocks and all. Additive by construction, so pressing it twice cannot overwrite anything.\n\nActivities already used elsewhere in the trip are preferred against, so a new day is not a copy of an old one. Once the destination’s catalogue is exhausted the planner reuses its best fits rather than creating an empty day — a repeated activity is a worse plan than a fresh one and a far better plan than a blank page.\n\n`addedDays` can be empty for two very different reasons and the response separates them. Empty alongside an empty `unreachableDays` means the trip is already fully planned. Empty alongside a POPULATED `unreachableDays` means the entitlement stops short of the trip’s length — every day within reach already existed, so nothing was added, and `allowance.refusal` carries the offer that would lift the wall. Reporting that second case as a success would tell somebody their trip was complete while four days of it were missing.\n\nDeterministic and catalogue-only, exactly like day regeneration: it costs no AI budget.",
+        "tags": [
+          "Itineraries"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The itinerary, which days were added, and which remain out of reach.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtendItineraryResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such itinerary, or it belongs to another traveller. The two are deliberately indistinguishable, for the same reason a session is.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many extends from this account in the last hour.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/itineraries/{id}/blocks/{blockId}": {
       "patch": {
         "operationId": "updateItineraryBlock",
@@ -3925,6 +4002,44 @@
         ],
         "additionalProperties": false,
         "description": "The single error shape returned by every non-2xx response in this API."
+      },
+      "ExtendItineraryResponse": {
+        "type": "object",
+        "properties": {
+          "itinerary": {
+            "$ref": "#/components/schemas/Itinerary"
+          },
+          "allowance": {
+            "$ref": "#/components/schemas/DayAllowance"
+          },
+          "addedDays": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 30,
+              "description": "1-based. Day 1 is the first day."
+            },
+            "description": "Day numbers this call planned. Empty when there was nothing to add."
+          },
+          "unreachableDays": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 30,
+              "description": "1-based. Day 1 is the first day."
+            },
+            "description": "Days inside the trip the entitlement will not stretch to. An empty `addedDays` alongside a populated `unreachableDays` means a wall was hit, NOT that the trip is complete — the two are indistinguishable without this field, and telling a traveller \"all done\" while four days are missing is the failure it exists to prevent."
+          }
+        },
+        "required": [
+          "itinerary",
+          "allowance",
+          "addedDays",
+          "unreachableDays"
+        ],
+        "additionalProperties": false
       },
       "ForgotPasswordBody": {
         "type": "object",
