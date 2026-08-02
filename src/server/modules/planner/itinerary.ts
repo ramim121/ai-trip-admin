@@ -578,6 +578,16 @@ function packDay(
 interface GenerateDayInput {
   itinerary: Pick<ItineraryRow, 'destinationId' | 'partySize' | 'pace' | 'transportPreference'>
   dayId: string
+  /**
+   * Which day of the trip this is.
+   *
+   * Used only once the catalogue has been exhausted, to vary WHICH activities
+   * repeat. Without it every exhausted day re-runs the same ranked query and
+   * gets the same answer, so days 5, 6 and 7 of a week in Cox's Bazar came back
+   * byte-identical — three copies of one day, which is a worse artefact than
+   * the empty days this replaced.
+   */
+  dayNumber: number
   /** Ids already used elsewhere in the trip, so day 3 is not day 1 again. */
   excludeActivityIds: readonly string[]
   interests?: readonly string[] | undefined
@@ -597,7 +607,32 @@ async function generateDayBlocks(input: GenerateDayInput): Promise<string[]> {
   // worse than no transfer at all.
   await db.itineraryBlock.deleteMany({ where: { dayId: input.dayId, isLocked: false } })
 
-  const search = await searchActivities({
+  /*
+   * Candidates: everything unused first, then repeats only once that runs out.
+   *
+   * WHY A SECOND SEARCH EXISTS AT ALL. `excludeActivityIds` becomes a hard
+   * `notIn` (see `activityWhere` in modules/catalog/service.ts), so once a trip
+   * has consumed every activity in its destination the filtered search returns
+   * nothing and this function used to create a day with no activities in it —
+   * silently, and reported as a success. At ten activities per destination and
+   * three a day at BALANCED pace, that is day four of a week-long trip. Those
+   * empty days could never be repaired either: regenerating one runs the same
+   * exhausted query and gets the same nothing.
+   *
+   * A REPEATED ACTIVITY IS A WORSE PLAN THAN A FRESH ONE AND A FAR BETTER PLAN
+   * THAN AN EMPTY DAY. So exhaustion degrades rather than fails: unused
+   * activities are still preferred and still come first, and only the shortfall
+   * is topped up from the unfiltered pool.
+   *
+   * NOTHING MARKS THE REPEAT IN THE DATABASE, deliberately. An `isRepeat`
+   * column would be a denormalisation that goes stale the moment a block moves
+   * or is deleted. The itinerary response already carries every day and every
+   * block, so "this activity is also on day 2" is derivable by the client from
+   * data it already holds — correct by construction, and free.
+   */
+  const wanted = ACTIVITIES_BY_PACE[itinerary.pace]
+
+  const fresh = await searchActivities({
     destinationId: itinerary.destinationId ?? undefined,
     interests: input.interests,
     partySize: itinerary.partySize,
@@ -605,10 +640,49 @@ async function generateDayBlocks(input: GenerateDayInput): Promise<string[]> {
     limit: 12,
   })
 
-  if (search.activities.length === 0) {
+  let candidates = fresh.activities
+
+  if (candidates.length < wanted) {
+    const topUp = await searchActivities({
+      destinationId: itinerary.destinationId ?? undefined,
+      interests: input.interests,
+      partySize: itinerary.partySize,
+      // No exclusions: this pass is precisely what they were preventing.
+      limit: 12,
+    })
+
+    const already = new Set(candidates.map((activity) => activity.id))
+    const spare = topUp.activities.filter((activity) => !already.has(activity.id))
+
+    /*
+     * Rotated by day number, so exhausted days differ from one another.
+     *
+     * `searchActivities` ranks deterministically, so without this every day
+     * past the catalogue's depth appended the same list in the same order and
+     * the packer chose the same three — days 5, 6 and 7 came back identical.
+     * Rotating the starting offset means each day begins from a different point
+     * in the pool, and a week in a ten-activity destination reads as a trip
+     * that revisits favourites rather than one day photocopied.
+     *
+     * Rotation, not a shuffle: this must be reproducible. Regenerating day 5
+     * has to give day 5 again, and `Math.random()` here would mean the plan a
+     * traveller sees depends on when they pressed the button.
+     */
+    const offset = spare.length === 0 ? 0 : input.dayNumber % spare.length
+    const rotated = [...spare.slice(offset), ...spare.slice(0, offset)]
+
+    candidates = [...candidates, ...rotated]
+  }
+
+  // Genuinely nothing to plan: a destination with no published activities, or
+  // an itinerary with no destination at all. Unlike the exhaustion case above,
+  // no second query can fix this, so an empty day is the honest result.
+  if (candidates.length === 0) {
     await syncTransitBlocks(input.dayId, itinerary.transportPreference)
     return []
   }
+
+  const search = { activities: candidates }
 
   // Search returns summaries; the packer needs durations and opening hours,
   // which only the detail shape carries.
@@ -759,6 +833,7 @@ export async function createItineraryFromBrief(
       const placed = await generateDayBlocks({
         itinerary: created,
         dayId: day.id,
+        dayNumber: day.dayNumber,
         excludeActivityIds: used,
         interests: brief.interests,
       })
@@ -848,6 +923,7 @@ export async function regenerateDay(
   await generateDayBlocks({
     itinerary,
     dayId: day.id,
+    dayNumber,
     excludeActivityIds: used,
   })
 
@@ -885,6 +961,7 @@ export async function extendToEntitlement(
     const placed = await generateDayBlocks({
       itinerary,
       dayId: day.id,
+      dayNumber,
       excludeActivityIds: used,
     })
     used.push(...placed)

@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import type { ReactNode } from 'react'
 import { signOut } from '../login/actions'
+import { env } from '@/lib/env'
 import { readConsoleAdmin } from './_lib/console-session'
 
 /**
@@ -41,8 +42,28 @@ const NAV = [
   { href: '/ai-usage', label: 'AI usage' },
 ] as const
 
+/**
+ * Links that leave this app.
+ *
+ * The design system is a gallery of the PUBLIC site's components — its buttons,
+ * its colour tokens, its motion primitives. It cannot be ported here: this
+ * console is deliberately server-rendered with no UI framework, so a copy would
+ * document components that do not exist in the app hosting it, and it would go
+ * stale the first time the website's tokens moved.
+ *
+ * So it stays where its components live, and is linked from where its audience
+ * is. Unlisted from the public site's own navigation — a traveller has no use
+ * for a component gallery — but one click away for staff, which is the intent.
+ *
+ * Resolved from PUBLIC_WEB_ORIGIN rather than hardcoded, because that value
+ * already has to be right: it builds every checkout redirect and password-reset
+ * link this app sends.
+ */
+const EXTERNAL_NAV = [{ path: '/design-system', label: 'Design system' }] as const
+
 export default async function AdminLayout({ children }: { children: ReactNode }) {
   const admin = await readConsoleAdmin()
+  const webOrigin = env().PUBLIC_WEB_ORIGIN
 
   return (
     <div className="flex min-h-full flex-1 flex-col bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
@@ -52,7 +73,7 @@ export default async function AdminLayout({ children }: { children: ReactNode })
             Beyond Borders
           </Link>
 
-          <nav className="flex gap-4 text-sm">
+          <nav className="flex flex-wrap gap-4 text-sm">
             {NAV.map((item) => (
               <Link
                 key={item.href}
@@ -61,6 +82,22 @@ export default async function AdminLayout({ children }: { children: ReactNode })
               >
                 {item.label}
               </Link>
+            ))}
+
+            {/* A plain anchor, not next/link: these leave this app entirely, and
+                prefetching another origin's route is neither possible nor
+                wanted. `rel="noreferrer"` because the target has no business
+                knowing which admin screen somebody came from. */}
+            {EXTERNAL_NAV.map((item) => (
+              <a
+                key={item.path}
+                href={`${webOrigin}${item.path}`}
+                target="_blank"
+                rel="noreferrer"
+                className="text-zinc-500 underline-offset-4 hover:text-zinc-900 hover:underline dark:text-zinc-500 dark:hover:text-zinc-100"
+              >
+                {item.label} ↗
+              </a>
             ))}
           </nav>
 
