@@ -158,6 +158,73 @@ export async function listQuoteQueue(take = 100) {
   })
 }
 
+/**
+ * The trip itself, for the person pricing it.
+ *
+ * Not `getItinerary` — that is scoped to the owner, as every traveller-facing
+ * read here is, and ops is not the owner. Pricing somebody's trip is precisely
+ * the case where an unscoped read is correct, so it gets its own function whose
+ * name says that rather than a `userId` parameter somebody could pass anything
+ * to. The console's role guard is what stands in for ownership.
+ *
+ * A DIFFERENT PROJECTION FROM THE PLANNER'S, deliberately. `ItineraryView`
+ * carries allowances, conflicts and transit-sync state — all answers to "what
+ * may this traveller still change", which is not a question anybody pricing the
+ * trip is asking. What ops needs is what was planned and what it is estimated to
+ * cost, so that is what this returns.
+ *
+ * `costBdt` here is the PLANNER'S estimate and never the quote. It is the
+ * starting point for a human, shown so nobody has to add up a week of activities
+ * by hand, and the number that reaches the traveller is the one ops types.
+ */
+export async function readQuoteTrip(itineraryId: string) {
+  return db.itinerary.findUnique({
+    where: { id: itineraryId },
+    select: {
+      id: true,
+      title: true,
+      destinationLabel: true,
+      totalDays: true,
+      partySize: true,
+      startDate: true,
+      endDate: true,
+      pace: true,
+      budgetBand: true,
+      transportPreference: true,
+      status: true,
+      days: {
+        orderBy: { dayNumber: 'asc' },
+        select: {
+          id: true,
+          dayNumber: true,
+          date: true,
+          title: true,
+          notes: true,
+          blocks: {
+            orderBy: [{ startMinute: 'asc' }, { sortOrder: 'asc' }],
+            select: {
+              id: true,
+              kind: true,
+              title: true,
+              description: true,
+              startMinute: true,
+              endMinute: true,
+              transitMode: true,
+              costBdt: true,
+              // The catalogue row behind an ACTIVITY block, where there is one.
+              // `pricePerPersonBdt` is PER PERSON while the block's `costBdt` is
+              // for the whole party, and `priceNote` is where "per boat" or
+              // "entry only" lives — both matter to somebody working out what to
+              // charge, and neither is recoverable from the block alone.
+              activity: { select: { name: true, pricePerPersonBdt: true, priceNote: true } },
+            },
+          },
+        },
+      },
+    },
+  })
+}
+
 export interface RevisionInput {
   subtotalBdt: number
   discountBdt: number
@@ -298,6 +365,41 @@ export async function sendQuote(quoteId: string, now: Date = new Date()) {
       })
     }
   })
+
+  return readQuote(quoteId)
+}
+
+/**
+ * Close a quote we are not going to fulfil.
+ *
+ * THIS IS NOT HOUSEKEEPING, it is the release valve on the partial unique index.
+ * Only one quote per itinerary may be open, so a request ops cannot price — the
+ * dates are gone, the party is too large, the traveller stopped replying — would
+ * otherwise sit REQUESTED forever and permanently block that traveller from ever
+ * asking about that trip again. Without this, the index that stops duplicate
+ * conversations becomes a way to lock somebody out of their own itinerary.
+ *
+ * An ACCEPTED quote is not withdrawable. Once a traveller has agreed a price
+ * they are owed a conversation, not a status change made without them.
+ */
+export async function withdrawQuote(quoteId: string, now: Date = new Date()) {
+  const claimed = await db.quote.updateMany({
+    where: { id: quoteId, status: { in: [...OPEN_STATUSES] } },
+    data: { status: QuoteStatus.WITHDRAWN, decidedAt: now },
+  })
+
+  if (claimed.count === 0) throw conflict('This quote is no longer open to withdraw.')
+
+  // The trip returns to the traveller's hands. Leaving it SUBMITTED or QUOTED
+  // would show "with us for pricing" on a trip nobody is pricing.
+  const quote = await db.quote.findUnique({ where: { id: quoteId }, select: { itineraryId: true } })
+
+  if (quote?.itineraryId) {
+    await db.itinerary.update({
+      where: { id: quote.itineraryId },
+      data: { status: ItineraryStatus.DRAFT },
+    })
+  }
 
   return readQuote(quoteId)
 }

@@ -33,6 +33,11 @@ const NAV = [
   { href: '/polls', label: 'Polls' },
   { href: '/plans', label: 'Plans' },
   { href: '/subscriptions', label: 'Subscriptions' },
+  // Quotes leads the money screens, because it is the only one that is a WORK
+  // QUEUE rather than a record. Bookings and Payments answer "what happened";
+  // Quotes answers "who is waiting on us", and a queue nobody passes on the way
+  // in is a queue that grows.
+  { href: '/quotes', label: 'Quotes' },
   // Bookings before Payments, and both before Coupons: a question about money
   // nearly always starts at "which booking", and the coupon is the explanation
   // for a figure on it rather than a thing anybody comes looking for first.

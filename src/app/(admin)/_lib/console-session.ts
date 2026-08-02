@@ -80,6 +80,25 @@ export const COMMERCE_READ_ROLES: readonly AdminRole[] = [AdminRole.OPS]
 export const COMMERCE_WRITE_ROLES: readonly AdminRole[] = []
 
 /**
+ * Roles that may price and send a quotation.
+ *
+ * OPS, and deliberately NOT `COMMERCE_WRITE_ROLES` — the two look adjacent and
+ * are different in kind. Editing a plan sets the price of every future purchase
+ * of it by everybody, which is why that list is SUPER_ADMIN only. Pricing a
+ * quote sets the price of ONE bespoke trip for ONE traveller who asked for it,
+ * it is attributed to its author on the revision row, and a mistake is corrected
+ * by sending a new version rather than by a migration.
+ *
+ * Reusing the stricter list here would have been the cautious-looking choice and
+ * the wrong one: quoting is the whole of OPS's daily work, so a console needing
+ * a SUPER_ADMIN for every quote is a console nobody can use, and the predictable
+ * result is one shared SUPER_ADMIN login for the whole office — strictly worse
+ * for both access control and the audit trail than granting OPS the thing their
+ * job is made of.
+ */
+export const QUOTE_WRITE_ROLES: readonly AdminRole[] = [AdminRole.OPS]
+
+/**
  * Roles that may read the catalog.
  *
  * Everyone on staff. This is the inventory we advertise publicly and the only
