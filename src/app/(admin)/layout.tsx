@@ -26,6 +26,10 @@ import { readConsoleAdmin } from './_lib/console-session'
  */
 const NAV = [
   { href: '/activities', label: 'Activities' },
+  // Straight after Activities, because that is what it feeds: a place import is
+  // an activity nobody has written yet, and the two screens are used in that
+  // order — search Google, then write it up.
+  { href: '/places', label: 'Place imports' },
   { href: '/packages', label: 'Packages' },
   { href: '/past-trips', label: 'Past trips' },
   { href: '/leaders', label: 'Leaders' },

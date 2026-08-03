@@ -77,15 +77,15 @@ model User {
   passwordResets     PasswordReset[]
   emailVerifications EmailVerification[]
 
-  subscriptions    Subscription[]
-  usageCounters    UsageCounter[]
-  payments         Payment[]
-  plannerSessions  PlannerSession[]
-  itineraries      Itinerary[]
+  subscriptions   Subscription[]
+  usageCounters   UsageCounter[]
+  payments        Payment[]
+  plannerSessions PlannerSession[]
+  itineraries     Itinerary[]
   /// Anonymous visitors that later became this account.
-  convertedFrom    AnonymousVisitor[]
+  convertedFrom   AnonymousVisitor[]
   /// Quotes requested. SetNull, so the commercial record survives deletion.
-  quotes           Quote[]
+  quotes          Quote[]
 
   /// Detached rather than cascaded — see each model for why. Spend survives a
   /// deleted account, a poll's totals must not silently drop, and an interest
@@ -133,8 +133,9 @@ model AdminUser {
 
   /// What this staff member let onto the public site. Named relations because
   /// AdminUser is referenced twice from two different moderation queues.
-  moderatedMedia   TripMedia[]  @relation("TripMediaModerator")
-  moderatedReviews TripReview[] @relation("TripReviewModerator")
+  moderatedMedia   TripMedia[]      @relation("TripMediaModerator")
+  moderatedReviews TripReview[]     @relation("TripReviewModerator")
+  reviewedPlaces   PlaceCandidate[]
 
   @@index([role])
   @@index([status])
@@ -751,9 +752,10 @@ model Destination {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  activities  Activity[]
-  itineraries Itinerary[]
-  packages    TravelPackage[]
+  activities      Activity[]
+  placeCandidates PlaceCandidate[]
+  itineraries     Itinerary[]
+  packages        TravelPackage[]
 
   @@index([isActive, sortOrder])
   @@index([country])
@@ -803,10 +805,12 @@ model Activity {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  images       ActivityImage[]
-  tags         ActivityTag[]
-  openingHours ActivityOpeningHours[]
-  blocks       ItineraryBlock[]
+  images         ActivityImage[]
+  tags           ActivityTag[]
+  openingHours   ActivityOpeningHours[]
+  blocks         ItineraryBlock[]
+  /// Set when this activity came from an approved Google Places import.
+  placeCandidate PlaceCandidate?
 
   @@index([destinationId, isActive])
   @@index([category])
@@ -2330,4 +2334,99 @@ model QuoteRevision {
   @@unique([quoteId, version])
   @@index([quoteId, sentAt])
   @@map("quote_revisions")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Place imports
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum PlaceCandidateStatus {
+  /// Imported from Google, nobody has looked at it.
+  PENDING
+  /// A curator turned it into a real Activity. `activityId` points at it.
+  APPROVED
+  /// A curator decided we will not sell it. `rejectedReason` says why.
+  REJECTED
+}
+
+/// A venue Google knows about, waiting for a human to decide whether we sell it.
+///
+/// A SEPARATE TABLE FROM `activities`, AND THAT IS THE WHOLE POINT. The planner
+/// may only ever recommend rows from `activities` — a foreign key on
+/// `itinerary_blocks.activityId` enforces it — so nothing in here can reach a
+/// traveller by accident, by a forgotten `isActive` check, or by a query
+/// somebody writes later without knowing this table exists. Approval MOVES data
+/// across that boundary rather than flipping a flag inside it.
+///
+/// The reason curation is mandatory rather than fussy: Google answers "does this
+/// place exist and where is it", and an Activity has to answer "what is it, how
+/// long does it take, what does it cost in taka, and when is it worth doing".
+/// Nothing in the Places response carries the last four. A row imported straight
+/// into the catalogue would be a venue we cannot price, cannot schedule and have
+/// never seen.
+///
+/// WHAT IS STORED HERE IS A CACHE WITH A SHELF LIFE. Google's terms permit
+/// keeping `place_id` indefinitely but only limited, temporary retention of the
+/// rest. `importedAt` is what makes that auditable, and the approved Activity is
+/// written from the CURATOR'S prose rather than copied from Google's — so the
+/// catalogue is our content, and this table is scaffolding that can be emptied.
+model PlaceCandidate {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  /// Google's stable identifier. Unique, so re-running the same search does not
+  /// pile up duplicates of a place somebody has already judged — including one
+  /// already REJECTED, which is the case that matters: a rejection has to stick.
+  googlePlaceId String @unique
+
+  /// Which destination this was searched under. The approved Activity inherits
+  /// it, and an Activity cannot exist without one.
+  destinationId String      @db.Uuid
+  destination   Destination @relation(fields: [destinationId], references: [id], onDelete: Cascade)
+
+  /// Exactly as Google returned it. Never shown to a traveller — the curator
+  /// writes the name that ships, because "Hotel Sea Crown Ltd." is a company
+  /// registration rather than something to put on an itinerary.
+  name             String
+  formattedAddress String?
+  /// Google's own type strings, e.g. `tourist_attraction`. Kept verbatim because
+  /// the mapping to our ActivityCategory is a guess this table should not bake in.
+  googleTypes      String[]
+  rating           Decimal? @db.Decimal(2, 1)
+  userRatingCount  Int?
+  /// Google's 0–4 band. Not a price: PRICE_LEVEL_MODERATE says nothing about taka.
+  priceLevel       String?
+  websiteUri       String?
+  googleMapsUri    String?
+
+  latitude  Decimal? @db.Decimal(9, 6)
+  longitude Decimal? @db.Decimal(9, 6)
+
+  /// Opening hours as Google phrases them, for the curator to read while filling
+  /// in ours. Not parsed on import — a weekday string is not a schedule.
+  openingHoursText String?
+
+  /// What was typed to find this, kept so a curator can tell a deliberate import
+  /// from a stray result on a broad search.
+  searchQuery String
+
+  status         PlaceCandidateStatus @default(PENDING)
+  rejectedReason String?
+
+  /// Set when APPROVED. SetNull rather than Cascade: deleting an activity should
+  /// not erase the record that somebody imported and approved it.
+  activityId String?   @unique @db.Uuid
+  activity   Activity? @relation(fields: [activityId], references: [id], onDelete: SetNull)
+
+  /// Who decided, and when. Null while PENDING.
+  reviewedByAdminId String?    @db.Uuid
+  reviewedBy        AdminUser? @relation(fields: [reviewedByAdminId], references: [id], onDelete: SetNull)
+  reviewedAt        DateTime?
+
+  /// When Google's copy of this was fetched. The retention clock.
+  importedAt DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([status, importedAt])
+  @@index([destinationId, status])
+  @@map("place_candidates")
 }

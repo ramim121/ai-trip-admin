@@ -77,6 +77,22 @@ const EnvSchema = z
     OPENAI_API_KEY: z.string().optional(),
     ANTHROPIC_API_KEY: z.string().optional(),
 
+    /**
+     * Google Places (New). Optional — without it the import screen says so and
+     * nothing else in the console is affected.
+     *
+     * A SEPARATE KEY FROM `GOOGLE_GENERATIVE_AI_API_KEY` even though both are
+     * Google. They are different products with different quotas and different
+     * blast radii: one spends model tokens and the other spends Places lookups,
+     * so a single key for both means rotating either takes down the other.
+     *
+     * Server-side only, and deliberately no `NEXT_PUBLIC_` variant. A Places key
+     * in a browser bundle is a key anybody can spend — the usual way that
+     * happens is a map component, which is why this whole flow stays
+     * server-rendered.
+     */
+    GOOGLE_PLACES_API_KEY: z.string().optional(),
+
     PUBLIC_WEB_ORIGIN: z.url().default('http://localhost:3000'),
     ADMIN_ORIGIN: z.url().default('http://localhost:3001'),
 

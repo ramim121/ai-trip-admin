@@ -71,18 +71,39 @@ export function ActivityForm({
   destinations,
   tags,
   error,
+  action = saveActivity,
+  hiddenFields,
+  submitLabel,
 }: {
   /** Null when creating. */
   activity: ActivityDetail | null
   destinations: DestinationSummary[]
   tags: TagSummary[]
   error?: string
+  /**
+   * Where the form posts. Defaults to the catalogue's own save.
+   *
+   * Overridden by the place-approval screen, which needs these same twenty
+   * fields but a different destination for them: approving an imported place
+   * creates an activity AND marks the candidate decided, in that order, with a
+   * failure in the second half needing to report that the first half happened.
+   *
+   * A prop rather than a second copy of this form. The fields, the parser and
+   * the two textarea formats are the fiddly part, and a copy would drift
+   * immediately — the first column added to Activity would reach one screen and
+   * not the other.
+   */
+  action?: (formData: FormData) => Promise<void>
+  /** Extra inputs the overriding action needs, e.g. which candidate this is. */
+  hiddenFields?: ReactNode
+  submitLabel?: string
 }) {
   const selectedTags = new Set(activity?.tags.map((tag) => tag.slug) ?? [])
 
   return (
-    <form action={saveActivity} className="flex flex-col gap-6">
+    <form action={action} className="flex flex-col gap-6">
       {activity ? <input type="hidden" name="id" value={activity.id} /> : null}
+      {hiddenFields}
 
       {error ? (
         <p
@@ -460,7 +481,7 @@ export function ActivityForm({
           type="submit"
           className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
         >
-          {activity ? 'Save changes' : 'Create activity'}
+          {submitLabel ?? (activity ? 'Save changes' : 'Create activity')}
         </button>
         <Link
           href="/activities"
