@@ -3,7 +3,11 @@ import { notFound } from 'next/navigation'
 import { PlanCode } from '@/generated/prisma/enums'
 import { db } from '@/lib/db'
 import { Locked } from '../../_components/locked'
-import { COMMERCE_READ_ROLES, readConsoleAdminWithRole } from '../../_lib/console-session'
+import {
+  COMMERCE_READ_ROLES,
+  COMMERCE_WRITE_ROLES,
+  readConsoleAdminWithRole,
+} from '../../_lib/console-session'
 import { formatDateTime } from '../../_lib/format'
 import { updatePlan } from './actions'
 
@@ -55,8 +59,23 @@ export default async function EditPlanPage({
   params: Promise<{ code: string }>
   searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
+  /*
+   * TWO GATES, BECAUSE THE PAGE AND THE FORM ARE NOT THE SAME PERMISSION.
+   *
+   * Reading a plan is an OPS question — "what does this tier actually include"
+   * comes up while answering a traveller. Changing one sets the price of every
+   * future purchase of it, and that is SUPER_ADMIN only.
+   *
+   * Gating only the page, as this did, rendered a fully submittable form to any
+   * OPS admin whose action then threw `Not permitted.` — and with no error.tsx
+   * anywhere under src/app, that was Next's raw error page, arriving after they
+   * had typed a new price in. The form is what needs the write role, so the form
+   * is what checks it. `activities/new` already worked this way; this did not.
+   */
   const admin = await readConsoleAdminWithRole(COMMERCE_READ_ROLES)
   if (admin === null) return <Locked />
+
+  const canWrite = (await readConsoleAdminWithRole(COMMERCE_WRITE_ROLES)) !== null
 
   const { code } = await params
   if (!isPlanCode(code)) notFound()
@@ -90,7 +109,14 @@ export default async function EditPlanPage({
         </p>
       )}
 
-      <form action={updatePlan} className="mt-6 space-y-5">
+      {!canWrite && (
+        <p className="mt-4 rounded-md border border-dashed border-zinc-300 px-3 py-2 text-sm text-zinc-600 dark:border-zinc-700 dark:text-zinc-400">
+          You can read this plan but not change it. Repricing a tier changes what every future
+          purchase of it costs, so it needs a super-admin.
+        </p>
+      )}
+
+      <form action={updatePlan} className="mt-6 space-y-5" hidden={!canWrite}>
         {/* Selects the row to write. Re-validated against the enum in the
             action — it travels through the client like every other field. */}
         <input type="hidden" name="code" value={plan.code} />

@@ -99,6 +99,27 @@ export const COMMERCE_WRITE_ROLES: readonly AdminRole[] = []
 export const QUOTE_WRITE_ROLES: readonly AdminRole[] = [AdminRole.OPS]
 
 /**
+ * Roles that may create and edit promo codes.
+ *
+ * OPS, on the same reasoning as quoting and again NOT `COMMERCE_WRITE_ROLES`.
+ * The distinction is blast radius, and for a coupon it is bounded BY THE ROW
+ * ITSELF: `maxRedemptions` caps how many times it can ever be used,
+ * `maxPerUser` caps it per account, `maxDiscountBdt` caps what a percentage can
+ * take off, and the window caps how long it lives. A mistake costs at most what
+ * those numbers allow, and deactivating stops it immediately.
+ *
+ * Repricing a plan has none of those brakes: it changes what every future
+ * purchase costs, for everybody, until somebody notices. That is the difference
+ * that puts the two in different lists rather than the fact that both involve
+ * money.
+ *
+ * A CODE IS STILL NEVER DELETED, only deactivated — see the actions. The audit
+ * trail and the redemption rows are what somebody will need when a traveller
+ * says a discount was promised.
+ */
+export const PROMO_WRITE_ROLES: readonly AdminRole[] = [AdminRole.OPS]
+
+/**
  * Roles that may read the catalog.
  *
  * Everyone on staff. This is the inventory we advertise publicly and the only
