@@ -57,6 +57,12 @@ AUTH_ADMIN_SECRET="…"
 
 # Google AI Studio key. Free tier is fine for development.
 GOOGLE_GENERATIVE_AI_API_KEY="…"
+
+# Optional. Powers the catalogue import screen at /places; without it that
+# screen says so and nothing else changes. A SEPARATE key from the one above —
+# different Google product, different quota, and one key for both means
+# rotating either takes down the other. Enable "Places API (New)".
+GOOGLE_PLACES_API_KEY="…"
 ```
 
 Travellers and staff are signed with **separate secrets** deliberately: a stolen traveller token must be unverifiable against an admin route even if someone forgets an audience check. Rotating one does not log out the other.
@@ -186,6 +192,16 @@ Four rules make the loop safe, and three of them live in the database rather tha
 A quote can only be asked for on a **saved** trip. Requesting sets the itinerary to `SUBMITTED`, which counts against the saved-trip cap, so accepting a DRAFT would be a way around `POST /save`.
 
 **Promo codes** are created and edited at `/coupons` by OPS. There is no delete — `coupon_redemptions` cascades, and that history is what you need when somebody says a discount was promised, so switching a code off is the whole of "stop it". The ceiling is enforced by counting redemption **rows**; `redeemedCount` is a denormalised counter for the list view and the console flags loudly if the two ever disagree.
+
+**Place imports — how the catalogue grows.** `/places` searches Google Places and queues what comes back. A curator opens one, writes it up, and approves it; approving creates a real activity through the same `createActivity` the hand-authored path uses.
+
+The curation step is structural rather than procedural. Imports land in `place_candidates`, a table the planner cannot read — `itinerary_blocks.activityId` is a foreign key into `activities`, so a candidate is incapable of appearing in a trip whatever anybody forgets to check. Approval _inserts_ into `activities`; it never flips a flag on a row that was already visible.
+
+A human is not optional here because Google answers "does this place exist, and where", while an activity has to answer "what is it, how long does it take, what does it cost in taka, and when is it worth doing" — the four things a planned day is made of, and Places carries none of them. Google's own text is shown beside the form and never pre-filled into it: their one-liner is written for a map pin, and copying it would put their content in our catalogue.
+
+One row per `googlePlaceId`, which is what makes a rejection stick — without it, re-running a search would re-queue something already turned down. Rejections carry a required reason and can be reopened, because judgements age.
+
+`GOOGLE_PLACES_API_KEY` is optional; without it the screen says so and nothing else changes. It is **server-side only** — never `NEXT_PUBLIC_*`, because a Places key in a browser bundle is a key anybody can spend. Enable **Places API (New)** in Google Cloud rather than the legacy Places API; the client falls back to legacy when New is refused, but legacy is closed to new projects and will eventually stop.
 
 **Manual blocks.** A traveller can put a hotel, meal, rest or free hour on any day by hand. Anything added that way is created `isLocked: true`, because Rebuild-day deletes every unpinned block before re-planning — an unlocked hand-typed hotel would silently vanish. The lock on each block is a toggle, so it can be released deliberately. Note that the conflict engine only inspects `ACTIVITY` blocks, so a manual block laid over an activity reports no clash.
 
