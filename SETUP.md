@@ -156,17 +156,38 @@ npx prisma migrate dev --name your_change   # author a migration
 
 **Entitlements.** Every limit is enforced **server-side**, never from a client-supplied flag:
 
-|                     | Free   | 200 BDT unlock               | Premium monthly |
-| ------------------- | ------ | ---------------------------- | --------------- |
-| Itinerary length    | 2 days | full, for that one itinerary | full            |
-| Saved itineraries   | 3      | —                            | per tier        |
-| Itineraries / month | —      | —                            | 10 / 50 / 100   |
+|                     | Free   | Premium 5 — ৳500/mo | Premium 100 — ৳5,000/mo |
+| ------------------- | ------ | ------------------- | ----------------------- |
+| Itinerary length    | 2 days | unlimited           | unlimited               |
+| Saved itineraries   | 3      | unlimited           | unlimited               |
+| Itineraries / month | —      | 5                   | 100                     |
+
+Those are the live rows today, not constants: prices and limits are edited in the console and `/pricing` reads them on every request, so nothing here is baked into code.
+
+There were once a one-off 200 BDT "unlock this itinerary" purchase and 10/50/100 monthly tiers. Both are gone — `PlanCode` is now `FREE | PREMIUM_5 | PREMIUM_100`, the `ItineraryUnlock` model and the `itineraries.isFullyUnlocked` column were dropped.
+
+**Unlimited accounts.** `users.unlimited` exempts one account from every ceiling — length, saved count, monthly volume and AI prompts. A database flag rather than an env allowlist, so it can be granted without a deploy, and it is read inside the same query that computes the entitlement so nothing downstream needs to know about it.
 
 Anonymous visitors get exactly **one** AI preview, identified by signed cookie + hashed IP + device fingerprint. The teaser response is cached on the normalised questionnaire answers, so bypass attempts mostly hit cache and cost nothing.
 
 **The AI is grounded, not free-associating.** It may only recommend activities returned by its catalog tools. Inventing a venue is treated as a hard failure, because you cannot sell, price, or honour something that isn't in your inventory. The system prompt is built exclusively from data you authored — a traveller's typed destination goes into a separate sanitised user-role message that is explicitly framed as untrusted, never into the system prompt.
 
 **Money is BDT, stored as integer taka.** Never floats. USD is display-only via an admin-set rate.
+
+**Quotations — how a bespoke trip gets priced.** A traveller saves a trip and asks for a quote; it appears in `/quotes`, oldest first; somebody prices it by hand and sends it; the traveller accepts or declines.
+
+Four rules make the loop safe, and three of them live in the database rather than in the service:
+
+- **A price somebody has seen is immutable.** Sending stamps `sentAt`, and a trigger then refuses every change to that revision. A correction has to be a new version.
+- **A draft is invisible.** `readMyQuote` and `listMyQuotes` filter out any revision with a null `sentAt`, because ops drafts numbers before agreeing to stand behind them.
+- **One open quote per trip**, enforced by a partial unique index — asking twice while a conversation is open is the same conversation. `withdrawQuote` is the release valve; without it a request nobody can price would lock a traveller out of their own itinerary forever.
+- **The total is computed, never accepted.** Subtotal and discount go in; a CHECK constraint refuses a row where `total ≠ subtotal − discount`.
+
+A quote can only be asked for on a **saved** trip. Requesting sets the itinerary to `SUBMITTED`, which counts against the saved-trip cap, so accepting a DRAFT would be a way around `POST /save`.
+
+**Promo codes** are created and edited at `/coupons` by OPS. There is no delete — `coupon_redemptions` cascades, and that history is what you need when somebody says a discount was promised, so switching a code off is the whole of "stop it". The ceiling is enforced by counting redemption **rows**; `redeemedCount` is a denormalised counter for the list view and the console flags loudly if the two ever disagree.
+
+**Manual blocks.** A traveller can put a hotel, meal, rest or free hour on any day by hand. Anything added that way is created `isLocked: true`, because Rebuild-day deletes every unpinned block before re-planning — an unlocked hand-typed hotel would silently vanish. The lock on each block is a toggle, so it can be released deliberately. Note that the conflict engine only inspects `ACTIVITY` blocks, so a manual block laid over an activity reports no clash.
 
 ---
 
@@ -186,7 +207,7 @@ Real payments are not connected. A **mock provider** stands in so the whole purc
 PAYMENTS_MOCK_ENABLED=true      # default true in development
 ```
 
-Buy an unlock or a plan anywhere in the UI and you land on a simulated gateway page carrying an unmissable **TEST MODE** banner, with Pay / Decline / Cancel buttons. Paying grants the real entitlement — the unlocked itinerary generates at full length, the subscription becomes active — so you can exercise every downstream path without moving money.
+Buy a plan anywhere in the UI and you land on a simulated gateway page carrying an unmissable **TEST MODE** banner, with Pay / Decline / Cancel buttons. Paying grants the real entitlement — the subscription becomes active and the ceilings lift — so you can exercise every downstream path without moving money.
 
 **It cannot quietly reach production.** Two independent flags guard it: the mock provider refuses to initiate _or_ settle when `NODE_ENV=production` unless `PAYMENTS_ALLOW_MOCK_IN_PRODUCTION=true` is also set. One flag is too easy to flip by accident. Every mock payment is stored with `isTest = true` and badged in the admin payments list, so test rows can never be mistaken for revenue.
 
@@ -199,6 +220,10 @@ To go live, implement `PaymentProvider` for bKash or SSLCommerz and register it.
 - **Playwright browsers are not installed** by `npm install`. Run `npx playwright install` before `npm run test:e2e`.
 - **Testimonial portraits are intentionally empty.** `IMAGE_SLOTS.testimonial*` render placeholders. Fill them only with photographs of real travellers who gave permission — a generated face beside a customer quote invents a customer.
 - **Prompt versions are not persisted.** `PlannerMessage` records the model but not which prompt version produced the turn, so stored conversations are attributable only by timestamp. Adding a `promptVersion` column would close it.
+- **Quotes never expire on their own.** `QuoteStatus.EXPIRED` exists in the enum and nothing writes it: there is no scheduled job, so a revision past its `validUntil` keeps status `SENT` and stays acceptable. The traveller's UI compares the date itself and says the price may no longer stand, but the API would still take the decision. A cron flipping stale quotes to `EXPIRED` would close it.
+- **The conflict engine only sees `ACTIVITY` blocks.** Overlap, travel-gap and opening-hours checks all filter to that kind, so a manually added hotel or meal placed over an activity reports no clash — and inserting one between two activities suppresses the travel-time warning that used to sit between them, because `syncTransitBlocks` only plans transfers between adjacent activities.
+- **Ops screens have no API.** Pricing, sending and withdrawing a quote, and every coupon write, happen through server actions rather than `/api/v1`. That is deliberate — the console is server-rendered with no client JavaScript, so it needs no endpoint — but it means a future mobile ops app would need those routes written.
+- **`CouponRedemption.userId` is `SetNull`.** Deleting a user nulls their redemption rows, so the per-account ceiling (`maxPerUser`) stops counting their past use while the total ceiling is unaffected. Rare, but it is a real way to regain a per-account allowance.
 
 ## 10. Security posture
 
