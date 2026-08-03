@@ -65,6 +65,45 @@ export async function parseJson<T>(req: Request, schema: z.ZodType<T>): Promise<
 }
 
 /**
+ * Read and validate a JSON body the caller need not send at all.
+ *
+ * For endpoints where EVERY field is optional. `parseJson` rejects an empty
+ * body, which is right for the great majority of routes — a POST that forgot its
+ * payload is a bug, and saying so is more useful than inventing `{}`. But on a
+ * route whose schema is entirely optional, "no body" is not a malformed request,
+ * it is the commonest correct one: a plain `fetch(url, { method: 'POST' })`
+ * sends neither a body nor a content-type, so refusing it makes the simplest
+ * possible call the one that fails.
+ *
+ * An absent body becomes `{}` and is validated normally, so defaults and
+ * refinements still apply. Malformed JSON is still a 400 — this is deliberately
+ * not a blanket "ignore anything unparseable".
+ */
+export async function parseOptionalJson<T>(req: Request, schema: z.ZodType<T>): Promise<T> {
+  const text = (await req.text()).trim()
+
+  let raw: unknown = {}
+
+  if (text !== '') {
+    try {
+      raw = JSON.parse(text)
+    } catch {
+      throw badRequest('Request body must be valid JSON.', [
+        { path: '', message: 'Expected a JSON body.' },
+      ])
+    }
+  }
+
+  const result = await schema.safeParseAsync(raw)
+
+  if (!result.success) {
+    throw badRequest('The request payload failed validation.', toDetails(result.error.issues))
+  }
+
+  return result.data
+}
+
+/**
  * Validate a URL's query string.
  *
  * Repeated keys (`?tag=a&tag=b`) collapse to an array so `z.array(...)` works;

@@ -76,7 +76,7 @@ export async function requestQuote(
 ) {
   const itinerary = await db.itinerary.findFirst({
     where: { id: itineraryId, userId },
-    select: { id: true, days: { select: { id: true }, take: 1 } },
+    select: { id: true, status: true, days: { select: { id: true }, take: 1 } },
   })
 
   if (itinerary === null) throw notFound('That itinerary was not found.')
@@ -84,6 +84,26 @@ export async function requestQuote(
   // Pricing an empty trip wastes an ops cycle and tells the traveller nothing.
   if (itinerary.days.length === 0) {
     throw badRequest('Add at least one day to this trip before asking us to price it.')
+  }
+
+  /*
+   * THE TRIP MUST ALREADY BE SAVED, and this is an entitlement gate rather than
+   * a tidiness rule.
+   *
+   * SUBMITTED is a member of SAVED_ITINERARY_STATUSES — the exact set the free
+   * tier's saved-trip cap counts. Setting it here unconditionally, as this
+   * function first did, let anybody at their cap create one more DRAFT and then
+   * "ask for a quote" to smuggle it into the saved set, walking straight past
+   * the gate `POST /save` enforces on the very same column.
+   *
+   * Refusing a DRAFT closes that without duplicating the cap arithmetic: by the
+   * time a trip is SAVED it has already been counted and allowed. Duplicating
+   * the check would have been the obvious fix and the worse one — two
+   * implementations of one limit drift, and the copy nobody remembers is the
+   * one that stays wrong.
+   */
+  if (itinerary.status === ItineraryStatus.DRAFT) {
+    throw badRequest('Save this trip before asking us to price it.')
   }
 
   const open = await db.quote.findFirst({
@@ -390,14 +410,24 @@ export async function withdrawQuote(quoteId: string, now: Date = new Date()) {
 
   if (claimed.count === 0) throw conflict('This quote is no longer open to withdraw.')
 
-  // The trip returns to the traveller's hands. Leaving it SUBMITTED or QUOTED
-  // would show "with us for pricing" on a trip nobody is pricing.
+  /*
+   * The trip returns to the traveller's hands as SAVED — never DRAFT.
+   *
+   * Leaving it SUBMITTED or QUOTED would show "with us for pricing" on a trip
+   * nobody is pricing. But dropping it to DRAFT, which this first did, is worse
+   * than the problem it solves: `requestQuote` only accepts a trip that is
+   * already saved, so the status before the quote was SAVED, and DRAFT is
+   * outside SAVED_ITINERARY_STATUSES. An ops withdrawal would therefore silently
+   * un-save a trip the traveller had spent one of their saved slots on, and take
+   * it out of the set My trips counts — a housekeeping action on our side
+   * quietly deleting something on theirs.
+   */
   const quote = await db.quote.findUnique({ where: { id: quoteId }, select: { itineraryId: true } })
 
   if (quote?.itineraryId) {
     await db.itinerary.update({
       where: { id: quote.itineraryId },
-      data: { status: ItineraryStatus.DRAFT },
+      data: { status: ItineraryStatus.SAVED },
     })
   }
 
@@ -427,18 +457,28 @@ export async function decideQuote(
 
   if (claimed.count === 0) throw conflict('This quote is no longer open for a decision.')
 
-  if (accept) {
-    const quote = await db.quote.findUnique({
-      where: { id: quoteId },
-      select: { itineraryId: true },
-    })
+  /*
+   * THE TRIP FOLLOWS THE DECISION EITHER WAY.
+   *
+   * Accepting moves it to ACCEPTED, which is the obvious half. Declining moves
+   * it back to SAVED, which is the half that was missing: this first updated the
+   * itinerary only when `accept` was true, so a declined quote left the trip
+   * sitting at QUOTED and My trips went on advertising "Quote ready" for a price
+   * the traveller had just refused. The status a traveller sees has to reflect
+   * the last thing they did, and declining is a thing they did.
+   *
+   * SAVED rather than DRAFT, for the reason `withdrawQuote` gives at length.
+   */
+  const quote = await db.quote.findUnique({
+    where: { id: quoteId },
+    select: { itineraryId: true },
+  })
 
-    if (quote?.itineraryId) {
-      await db.itinerary.update({
-        where: { id: quote.itineraryId },
-        data: { status: ItineraryStatus.ACCEPTED },
-      })
-    }
+  if (quote?.itineraryId) {
+    await db.itinerary.update({
+      where: { id: quote.itineraryId },
+      data: { status: accept ? ItineraryStatus.ACCEPTED : ItineraryStatus.SAVED },
+    })
   }
 
   return readMyQuote(userId, quoteId)

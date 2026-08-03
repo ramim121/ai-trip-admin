@@ -2,7 +2,7 @@ import type { NextRequest } from 'next/server'
 import { requireUser } from '@/server/http/guards'
 import { json, route } from '@/server/http/handler'
 import { enforceRateLimit } from '@/server/http/rate-limit'
-import { parseJson } from '@/server/http/validate'
+import { parseOptionalJson } from '@/server/http/validate'
 import { RequestQuoteBody, toQuoteView } from '@/server/modules/quotes/schema'
 import { requestQuote } from '@/server/modules/quotes/service'
 
@@ -39,7 +39,9 @@ export const POST = route(
       'That is a lot of quote requests at once. Give us a chance to answer.'
     )
 
-    const body = await parseJson(req, RequestQuoteBody)
+    // Optional, because every field of RequestQuoteBody is. A traveller who just
+    // presses the button sends no body at all, and that is the commonest call.
+    const body = await parseOptionalJson(req, RequestQuoteBody)
 
     // Ownership lives in the service's WHERE clause: a stranger's itinerary is
     // a 404 here, indistinguishable from one that does not exist.
