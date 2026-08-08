@@ -1196,6 +1196,28 @@ enum AiSurface {
   DAY_REGENERATION
   /// Ranking or suggesting catalog activities.
   SUGGESTION
+
+  // ── Journey planner ───────────────────────────────────────────────────────
+  //
+  // Separate from the values above so the console can answer which feature is
+  // spending. A funnel running eight model calls per trip is not comparable to
+  // a planner running one per turn, and folding them together makes the first
+  // month's bill unattributable.
+
+  /// Parsing one typed sentence into trip fields, before sign-in.
+  JOURNEY_INTAKE
+  /// Drafting the day-by-day skeleton.
+  JOURNEY_SKELETON
+  /// Merging a message into a preference brief.
+  JOURNEY_BRIEF
+  /// Ranking real provider candidates against a brief.
+  JOURNEY_RANKER
+  /// Estimating a transfer between two places.
+  JOURNEY_TRANSFER
+  /// A turn of the main itinerary chat.
+  JOURNEY_CHAT
+  /// Asking which format of a packaged tour somebody wants.
+  JOURNEY_ELICITOR
 }
 
 enum AiCallOutcome {
