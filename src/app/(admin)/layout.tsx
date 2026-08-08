@@ -30,6 +30,11 @@ const NAV = [
   // an activity nobody has written yet, and the two screens are used in that
   // order — search Google, then write it up.
   { href: '/places', label: 'Place imports' },
+  // Routes sits with the catalogue rather than with the money screens: it is
+  // inventory knowledge, written long before anybody prices a specific trip
+  // against it, and it is the only source the planner has for what a transfer
+  // costs.
+  { href: '/routes', label: 'Transfer routes' },
   { href: '/packages', label: 'Packages' },
   { href: '/past-trips', label: 'Past trips' },
   { href: '/leaders', label: 'Leaders' },
