@@ -692,6 +692,7 @@ export async function readComparison(journeyId: string, userId: string | null) {
           longitude: true,
           snapshot: true,
           briefId: true,
+          changeSetId: true,
         },
       },
     },

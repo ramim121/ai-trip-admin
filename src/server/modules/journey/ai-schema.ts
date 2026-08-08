@@ -121,6 +121,22 @@ export const SkeletonDaySchema = z.object({
    * until this existed.
    */
   location: z.string().trim().min(1).max(80),
+  /**
+   * One sentence about the shape of the day, for the collapsed header.
+   *
+   * A COLLAPSED DAY STILL HAS TO BE WORTH READING. With ten days on screen the
+   * traveller is scanning headers, and "Day 3 — Krabi" tells them nothing they
+   * did not already know. "Move hotels in the morning, islands after lunch, late
+   * seafood dinner" tells them whether this is the day they were looking for.
+   *
+   * Truncated rather than refused, which is the lesson the ranker's caps taught:
+   * an over-long sentence must not cost the whole skeleton.
+   */
+  summary: z
+    .string()
+    .trim()
+    .max(400)
+    .transform((value) => (value.length <= 200 ? value : `${value.slice(0, 197)}…`)),
   /** Capped at four, so pace is enforced by shape rather than asked for in prose. */
   items: z.array(SkeletonItemSchema).min(1).max(4),
 })

@@ -69,8 +69,35 @@ export const JourneyItemView = z
     /** Image, rating and deep link as the provider gave them at pick time. */
     snapshot: z.unknown().nullable(),
     briefId: z.uuid().nullable(),
+    /**
+     * The AI turn that created, moved or retimed this, if one did.
+     *
+     * Equal to the journey's `lastChangeSetId` exactly when this item is part of
+     * the most recent change — which is how the interface says "these four are
+     * what just happened" while holding no state of its own, and keeps saying it
+     * after a reload.
+     */
+    changeSetId: z.uuid().nullable(),
   })
   .meta({ id: 'JourneyItemView' })
+
+export const JourneyDayView = z
+  .object({
+    dayNumber: z.int().min(1),
+    /** Where the traveller is that day. Also what makes transfer gaps findable. */
+    locationName: z.string().nullable(),
+    title: z.string().nullable(),
+    /** One line we wrote about the shape of the day. Redrawn freely. */
+    summary: z.string().nullable(),
+    /** One the traveller wrote. Never overwritten by anything we generate. */
+    note: z.string().nullable(),
+  })
+  .meta({
+    id: 'JourneyDayView',
+    description:
+      'A day as a thing rather than an integer on an item. `summary` is ours and is redrawn ' +
+      'whenever the day is; `note` is theirs and no generator may touch it.',
+  })
 
 export const PreferenceBriefView = z
   .object({
@@ -149,6 +176,24 @@ export const JourneyView = z
     budgetScope: z.enum(BudgetScope),
     status: z.enum(JourneyStatus),
     quoteId: z.uuid().nullable(),
+    /**
+     * The most recent AI turn that changed anything, or null.
+     *
+     * Only useful next to the items: an item is part of that turn exactly when
+     * the two ids match. Sent as an id rather than as a list of item ids because
+     * the pairing then cannot go stale — a client holding a list would keep
+     * highlighting an item the next turn moved.
+     */
+    lastChangeSetId: z.uuid().nullable(),
+    /**
+     * One entry per day that has anything to say about itself.
+     *
+     * SPARSE, NOT ONE PER DAY OF THE TRIP. A blank plan has no rows at all, and
+     * a day nobody has drafted or annotated has none either — so the client
+     * renders `durationDays` days and looks each one up rather than trusting the
+     * array's length.
+     */
+    days: z.array(JourneyDayView),
     items: z.array(JourneyItemView),
     briefs: z.array(PreferenceBriefView),
     validation: ValidationView,
@@ -322,8 +367,38 @@ export const RequestJourneyQuoteBody = z
   .meta({ id: 'RequestJourneyQuoteBody' })
 
 export const JourneyChatBody = z
-  .object({ message: z.string().trim().min(1).max(1000) })
+  .object({
+    message: z.string().trim().min(1).max(1000),
+    /**
+     * The days the traveller has selected, if any.
+     *
+     * THE PRONOUN PROBLEM, SOLVED BY THE INTERFACE RATHER THAN BY THE MODEL.
+     * "Give this day to Universal Studios" is unanswerable from text alone —
+     * *which* day? Selecting day 2 and typing that sentence makes it obvious,
+     * and it is obvious to the model too, because the days arrive as data rather
+     * than as something to infer.
+     *
+     * Empty means the whole trip, which is the right default: somebody who
+     * selected nothing is talking about the plan.
+     */
+    dayNumbers: z.array(z.int().min(1).max(60)).max(14).default([]),
+  })
   .meta({ id: 'JourneyChatBody' })
+
+export const SetDayNoteBody = z
+  .object({
+    note: z
+      .string()
+      .max(2000)
+      .nullable()
+      .transform((value) => (value === null || value.trim() === '' ? null : value.trim())),
+  })
+  .meta({
+    id: 'SetDayNoteBody',
+    description:
+      "The traveller's own note on a day. Cleared by sending null or an empty string. Nothing " +
+      'we generate ever writes this column.',
+  })
 
 export const JourneyChatResponse = z
   .object({
@@ -516,6 +591,7 @@ interface ItemRow {
   longitude: unknown
   snapshot: unknown
   briefId: string | null
+  changeSetId: string | null
 }
 
 /** Prisma hands Decimal back as an object; the wire wants a number or null. */
@@ -557,6 +633,7 @@ export function toItemView(row: ItemRow): z.infer<typeof JourneyItemView> {
     longitude: toNumber(row.longitude),
     snapshot: row.snapshot ?? null,
     briefId: row.briefId,
+    changeSetId: row.changeSetId,
   }
 }
 
@@ -579,7 +656,15 @@ export interface JourneyProjectionInput {
   budgetScope: BudgetScope
   status: JourneyStatus
   quoteId: string | null
+  lastChangeSetId: string | null
   updatedAt: Date
+  days: {
+    dayNumber: number
+    locationName: string | null
+    title: string | null
+    summary: string | null
+    note: string | null
+  }[]
   items: ItemRow[]
   briefs: {
     id: string
@@ -618,6 +703,14 @@ export function toJourneyView(
     budgetScope: row.budgetScope,
     status: row.status,
     quoteId: row.quoteId,
+    lastChangeSetId: row.lastChangeSetId,
+    days: row.days.map((day) => ({
+      dayNumber: day.dayNumber,
+      locationName: day.locationName,
+      title: day.title,
+      summary: day.summary,
+      note: day.note,
+    })),
     items: row.items.map(toItemView),
     briefs: row.briefs.map((brief) => ({
       id: brief.id,

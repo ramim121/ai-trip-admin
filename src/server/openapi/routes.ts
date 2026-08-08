@@ -45,6 +45,7 @@ import {
   JourneyChatBody,
   JourneyChatResponse,
   JourneyComparisonView,
+  SetDayNoteBody,
   JourneyListResponse,
   JourneyView,
   MoveItemBody,
@@ -1968,6 +1969,33 @@ registerRoute({
     404: errorResponse(NOT_MY_JOURNEY),
     409: errorResponse('A quote for this plan is already open.'),
     429: errorResponse('Too many quote requests from this account in the last hour.'),
+    500: errorResponse(UNEXPECTED),
+  },
+})
+
+registerRoute({
+  method: 'patch',
+  path: '/api/v1/journeys/{id}/days/{dayNumber}',
+  operationId: 'setJourneyDayNote',
+  summary: "Write the traveller's own note on a day",
+  description:
+    'THE ONE PIECE OF TEXT ON A PLAN THAT NOTHING GENERATES. Every other sentence here was ' +
+    'written by a model and can be rewritten by one — the day summary, the match reasons, the ' +
+    'preference brief. This column belongs to the traveller, and no prompt, redraw or ' +
+    'regenerate touches it.\n\n' +
+    '"Anniversary dinner, do not move this" is the kind of thing somebody writes once and ' +
+    'expects to survive an afternoon of rearranging. It is also handed to the chat verbatim, so ' +
+    'the model is told about the dinner rather than left to move it.\n\n' +
+    'Send null or an empty string to clear. Returns the whole plan, because the note changes ' +
+    'what the conversation is briefed with.',
+  tags: JOURNEYS,
+  security: 'user',
+  requestSchema: SetDayNoteBody,
+  responses: {
+    200: { schema: JourneyView, description: 'The plan, with the note stored.' },
+    400: errorResponse('That is not a day of this trip, or the note is too long.'),
+    401: errorResponse('Authentication is required.'),
+    404: errorResponse(NOT_MY_JOURNEY),
     500: errorResponse(UNEXPECTED),
   },
 })

@@ -4841,6 +4841,101 @@
         }
       }
     },
+    "/api/v1/journeys/{id}/days/{dayNumber}": {
+      "patch": {
+        "operationId": "setJourneyDayNote",
+        "summary": "Write the traveller's own note on a day",
+        "description": "THE ONE PIECE OF TEXT ON A PLAN THAT NOTHING GENERATES. Every other sentence here was written by a model and can be rewritten by one — the day summary, the match reasons, the preference brief. This column belongs to the traveller, and no prompt, redraw or regenerate touches it.\n\n\"Anniversary dinner, do not move this\" is the kind of thing somebody writes once and expects to survive an afternoon of rearranging. It is also handed to the chat verbatim, so the model is told about the dinner rather than left to move it.\n\nSend null or an empty string to clear. Returns the whole plan, because the note changes what the conversation is briefed with.",
+        "tags": [
+          "Journey planner"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "dayNumber",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetDayNoteBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The plan, with the note stored.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JourneyView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "That is not a day of this trip, or the note is too long.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such plan, or it belongs to somebody else. The two answer identically on purpose — distinguishing them would make this endpoint a way to discover real plan ids.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error. The message is deliberately constant and carries no internal detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/journeys/{id}/comparison": {
       "get": {
         "operationId": "getJourneyComparison",
@@ -6725,6 +6820,16 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 1000
+          },
+          "dayNumbers": {
+            "default": [],
+            "maxItems": 14,
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 60
+            }
           }
         },
         "required": [
@@ -6915,6 +7020,65 @@
         "additionalProperties": false,
         "description": "What they planned beside what it costs.\n\nTHE PLAN IS THE SPINE AND THE QUOTE HANGS OFF IT. Every planned item appears as a row whether or not it was priced, so a line ops decided not to quote for shows as an absence rather than by simply not being there — the difference between noticing now and noticing at the airport. Lines with no `journeyItemId` are collected in `extras`, because \"things we added\" is a different question from \"what you asked for, priced\".\n\nOnly sent revisions ever appear here. A draft is a number nobody has agreed to stand behind, and a traveller shown one would quite reasonably hold us to it."
       },
+      "JourneyDayView": {
+        "type": "object",
+        "properties": {
+          "dayNumber": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "locationName": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "dayNumber",
+          "locationName",
+          "title",
+          "summary",
+          "note"
+        ],
+        "additionalProperties": false,
+        "description": "A day as a thing rather than an integer on an item. `summary` is ours and is redrawn whenever the day is; `note` is theirs and no generator may touch it."
+      },
       "JourneyItemView": {
         "type": "object",
         "properties": {
@@ -7086,6 +7250,18 @@
                 "type": "null"
               }
             ]
+          },
+          "changeSetId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -7107,7 +7283,8 @@
           "latitude",
           "longitude",
           "snapshot",
-          "briefId"
+          "briefId",
+          "changeSetId"
         ],
         "additionalProperties": false
       },
@@ -7349,6 +7526,24 @@
               }
             ]
           },
+          "lastChangeSetId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "days": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JourneyDayView"
+            }
+          },
           "items": {
             "type": "array",
             "items": {
@@ -7398,6 +7593,8 @@
           "budgetScope",
           "status",
           "quoteId",
+          "lastChangeSetId",
+          "days",
           "items",
           "briefs",
           "validation",
@@ -11660,6 +11857,26 @@
           "remaining"
         ],
         "additionalProperties": false
+      },
+      "SetDayNoteBody": {
+        "type": "object",
+        "properties": {
+          "note": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "note"
+        ],
+        "description": "The traveller's own note on a day. Cleared by sending null or an empty string. Nothing we generate ever writes this column."
       },
       "SettlementOutcome": {
         "type": "string",

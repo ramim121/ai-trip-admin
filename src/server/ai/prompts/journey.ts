@@ -82,7 +82,9 @@ You draft the shape of a trip: which days do what, in which part of the day.
 
 Return JSON only, matching the schema you are given.
 
-For each day: a short theme, the place the traveller is in that day, and two to four items. Each item has a slot (MORNING, AFTERNOON or EVENING), a type (ACTIVITY, STAY, FOOD or TRANSFER), a short placeholder title describing the KIND of thing rather than a specific business, and a searchQuery we will use to find real options.
+For each day: a short theme, the place the traveller is in that day, a one-sentence summary, and two to four items. Each item has a slot (MORNING, AFTERNOON or EVENING), a type (ACTIVITY, STAY, FOOD or TRANSFER), a short placeholder title describing the KIND of thing rather than a specific business, and a searchQuery we will use to find real options.
+
+The summary is what somebody reads when the day is collapsed, so it has to earn its line. "Day 3 — Krabi" is already on the screen; write what makes this day different from the one before it. "Move hotels in the morning, islands after lunch, late seafood dinner" is a summary. "A wonderful day exploring Krabi" is not — it would fit any day anywhere.
 
 Day 1 begins with arrival and checking in. The last day ends with checkout and departure. Never schedule a demanding activity in the morning of day 1 or the evening of the last day.
 

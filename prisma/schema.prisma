@@ -2613,7 +2613,14 @@ model Journey {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  /// What the last AI turn touched.
+  ///
+  /// An item belongs to that turn exactly when its changeSetId matches this,
+  /// which stays true across a reload and needs no client state.
+  lastChangeSetId String? @db.Uuid
+
   items  JourneyItem[]
+  days   JourneyDay[]
   briefs PreferenceBrief[]
   quotes Quote[]
 
@@ -2683,6 +2690,10 @@ model JourneyItem {
   /// admin sees both what was chosen and what was actually wanted.
   briefId String?          @db.Uuid
   brief   PreferenceBrief? @relation(fields: [briefId], references: [id], onDelete: SetNull)
+
+  /// Stamped by the AI turn that created, moved or retimed this. Compared
+  /// against the journey's own lastChangeSetId to render "changed just now".
+  changeSetId String? @db.Uuid
 
   sortOrder Int @default(0)
 
@@ -2845,4 +2856,36 @@ model QuoteLineItem {
   @@index([quoteRevisionId, sortOrder])
   @@index([journeyItemId])
   @@map("quote_line_items")
+}
+
+/// A day, as a thing rather than as an integer on an item.
+///
+/// THREE KINDS OF TEXT, KEPT APART. `locationName` is a fact about where the day
+/// happens. `summary` is ours — one line the model wrote about its shape, and
+/// regenerated freely. `note` is theirs, and nothing we generate may overwrite
+/// it: a traveller who wrote "anniversary dinner, do not move this" must not
+/// lose that sentence to a redraw.
+model JourneyDay {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  journeyId String  @db.Uuid
+  journey   Journey @relation(fields: [journeyId], references: [id], onDelete: Cascade)
+
+  /// 1-based, matching JourneyItem. Day 1 is the first day, not an index.
+  dayNumber Int
+
+  locationName String?
+  title        String?
+
+  /// At most a sentence, written by us about the shape of the day.
+  summary String?
+
+  /// Whatever the traveller typed. Never rewritten by a generator.
+  note String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([journeyId, dayNumber])
+  @@map("journey_days")
 }

@@ -66,6 +66,19 @@ const JOURNEY_SELECT = {
   userNotes: true,
   createdAt: true,
   updatedAt: true,
+  /// What the last AI turn touched. An item belongs to it exactly when the two
+  /// ids match, which survives a reload and needs no client state.
+  lastChangeSetId: true,
+  days: {
+    orderBy: { dayNumber: 'asc' },
+    select: {
+      dayNumber: true,
+      locationName: true,
+      title: true,
+      summary: true,
+      note: true,
+    },
+  },
   items: {
     orderBy: [{ dayNumber: 'asc' }, { slot: 'asc' }, { sortOrder: 'asc' }],
     select: {
@@ -90,6 +103,8 @@ const JOURNEY_SELECT = {
       longitude: true,
       snapshot: true,
       briefId: true,
+      /// Set by the AI turn that created, moved or retimed this.
+      changeSetId: true,
       sortOrder: true,
     },
   },
@@ -296,7 +311,69 @@ export async function generateSkeleton(journeyId: string, userId: string) {
       }))
     )
 
+  /*
+   * The days themselves, not only their items.
+   *
+   * A day carries facts no item does: where the traveller is, what the day is
+   * for, and — later — whatever they write about it. Deriving the location from
+   * the items instead would work right up until somebody deletes the last item
+   * on a day, and the day forgets which city it was in.
+   *
+   * `note` is deliberately absent from this write, and `skipDuplicates` is why
+   * that matters: a regenerate cannot reach across and blank a sentence the
+   * traveller wrote.
+   */
+  const dayRows = skeleton.days
+    .filter((day) => day.dayNumber <= journey.durationDays)
+    .map((day) => ({
+      journeyId,
+      dayNumber: day.dayNumber,
+      locationName: day.location,
+      title: day.theme,
+      summary: day.summary,
+    }))
+
   if (rows.length > 0) await db.journeyItem.createMany({ data: rows })
+  if (dayRows.length > 0) {
+    await db.journeyDay.createMany({ data: dayRows, skipDuplicates: true })
+  }
+
+  return readJourney(journeyId, userId)
+}
+
+/**
+ * What the traveller wants to say about one day.
+ *
+ * THEIR TEXT, NEVER OURS. `summary` is regenerated whenever a day is redrafted;
+ * this column is touched by no generator, because "anniversary dinner, do not
+ * move this" is precisely the sentence a redraw must not eat.
+ *
+ * Upserts, because a day row need not exist yet — somebody can write a note on
+ * day 4 of a blank plan, before anything has been drafted into it.
+ */
+export async function setDayNote(
+  journeyId: string,
+  userId: string,
+  dayNumber: number,
+  note: string | null
+) {
+  const journey = await readJourney(journeyId, userId)
+
+  if (dayNumber < 1 || dayNumber > journey.durationDays) {
+    throw badRequest(`This trip is ${journey.durationDays} days long.`)
+  }
+
+  const trimmed = note === null || note.trim() === '' ? null : note.trim()
+
+  if (trimmed !== null && trimmed.length > 2000) {
+    throw badRequest('That note is longer than we can store — two thousand characters is the cap.')
+  }
+
+  await db.journeyDay.upsert({
+    where: { journeyId_dayNumber: { journeyId, dayNumber } },
+    create: { journeyId, dayNumber, note: trimmed },
+    update: { note: trimmed },
+  })
 
   return readJourney(journeyId, userId)
 }
@@ -812,6 +889,25 @@ export async function updateBasics(
     await db.journeyItem.updateMany({
       where: { journeyId, dayNumber: { gt: patch.durationDays } },
       data: { dayNumber: patch.durationDays },
+    })
+
+    /*
+     * Day records past the new end are DELETED where items are moved, and the
+     * asymmetry is deliberate.
+     *
+     * An item is something the traveller chose and would notice losing, so it
+     * survives on a crowded final day they can see and fix. A day record is a
+     * location, a generated summary and possibly a note about a day that no
+     * longer exists — moving it would collide with the real day 6's row on the
+     * unique index, and keeping it would leave the trigger's invariant false for
+     * every future write.
+     *
+     * A note written about a day somebody has just deleted is genuinely lost.
+     * That is the honest outcome of shortening a trip, and it is why shortening
+     * is a deliberate edit rather than something the chat does casually.
+     */
+    await db.journeyDay.deleteMany({
+      where: { journeyId, dayNumber: { gt: patch.durationDays } },
     })
   }
 
