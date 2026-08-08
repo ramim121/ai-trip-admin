@@ -2289,6 +2289,15 @@ model Quote {
   itineraryId String?    @db.Uuid
   itinerary   Itinerary? @relation(fields: [itineraryId], references: [id], onDelete: SetNull)
 
+  /// The other planner.
+  ///
+  /// A quote prices an itinerary OR a journey, never both — a CHECK enforces it.
+  /// One pricing pipeline rather than two: quotes already own revisions, the
+  /// immutable-once-sent trigger, the ops queue and the accept predicate, and a
+  /// second table would duplicate every one of them.
+  journeyId String?  @db.Uuid
+  journey   Journey? @relation(fields: [journeyId], references: [id], onDelete: SetNull)
+
   status QuoteStatus @default(REQUESTED)
 
   /// What the traveller said when asking. Their words, not a form's.
@@ -2601,6 +2610,7 @@ model Journey {
 
   items  JourneyItem[]
   briefs PreferenceBrief[]
+  quotes Quote[]
 
   @@index([userId, updatedAt])
   @@index([status, updatedAt])

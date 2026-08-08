@@ -87,13 +87,40 @@ export const SkeletonItemSchema = z.object({
   title: z.string().trim().min(1).max(120),
   /** What we type into the tour and place search to make it real. */
   searchQuery: z.string().trim().min(1).max(120),
-  /** Minutes. A hint for slot packing, refined when a real option is picked. */
-  durationMin: z.number().int().min(15).max(1440).nullable(),
+  /**
+   * Minutes — a hint for slot packing, refined when a real option is picked.
+   *
+   * ZERO IS ACCEPTED AND MEANS "NOT APPLICABLE". A stay has no duration:
+   * checking into a hotel is not a fifteen-minute activity, and the model
+   * reasonably says so with a 0 rather than inventing a length. A floor of 15
+   * rejected every draft containing a hotel, which is every draft.
+   *
+   * Normalised to null here so nothing downstream has to know that 0 and null
+   * mean the same thing — the conflict checker treats null as "floats within its
+   * slot", which is exactly right for a stay.
+   */
+  durationMin: z
+    .number()
+    .int()
+    .min(0)
+    .max(1440)
+    .nullable()
+    .transform((value) => (value === null || value < 15 ? null : value)),
 })
 
 export const SkeletonDaySchema = z.object({
   dayNumber: z.number().int().min(1).max(60),
   theme: z.string().trim().min(1).max(80),
+  /**
+   * Where the traveller is that day.
+   *
+   * LOAD-BEARING FOR TRANSFERS. Gap-cards are found by noticing that consecutive
+   * items are in different places, so without a per-day location every item on a
+   * multi-city trip inherits the first city and the gaps are nonsense — a
+   * Phuket-and-Krabi trip showed three transfers, all in the wrong direction,
+   * until this existed.
+   */
+  location: z.string().trim().min(1).max(80),
   /** Capped at four, so pace is enforced by shape rather than asked for in prose. */
   items: z.array(SkeletonItemSchema).min(1).max(4),
 })
