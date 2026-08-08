@@ -232,6 +232,9 @@ export async function streamPlannerTurn(input: PlannerTurnInput): Promise<Respon
     ...(destinationName === undefined && session.tripBrief.destination
       ? { travellerDestination: session.tripBrief.destination }
       : {}),
+    // Their own words, if they wrote any. Untrusted like the place name, and
+    // more useful than every structured field put together.
+    ...(session.tripBrief.notes ? { travellerNotes: session.tripBrief.notes } : {}),
     todayIso: new Date().toISOString().slice(0, 10),
   })
 

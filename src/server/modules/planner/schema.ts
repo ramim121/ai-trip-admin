@@ -76,6 +76,12 @@ export const TripBriefInput = z
     transportPreference: z.enum(TRANSPORT_PREFERENCES).optional(),
     budgetBand: z.enum(BUDGET_BANDS).optional(),
     interests: z.array(z.string().trim().min(1).max(80)).max(20).optional(),
+    notes: z
+      .string()
+      .trim()
+      .max(600)
+      .optional()
+      .describe('Anything they wanted to say in their own words. Distinct from mobilityNotes.'),
     mobilityNotes: z.string().trim().max(500).optional(),
     mustSee: z.array(z.string().trim().min(1).max(120)).max(20).optional(),
     avoid: z.array(z.string().trim().min(1).max(120)).max(20).optional(),

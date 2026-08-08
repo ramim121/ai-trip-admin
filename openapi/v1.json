@@ -12466,6 +12466,11 @@
               "type": "string"
             }
           },
+          "notes": {
+            "description": "Anything they wanted to say in their own words. Distinct from mobilityNotes.",
+            "type": "string",
+            "maxLength": 600
+          },
           "mobilityNotes": {
             "type": "string",
             "maxLength": 500
@@ -12567,6 +12572,11 @@
               "minLength": 1,
               "maxLength": 80
             }
+          },
+          "notes": {
+            "description": "Anything they wanted to say in their own words. Distinct from mobilityNotes.",
+            "type": "string",
+            "maxLength": 600
           },
           "mobilityNotes": {
             "type": "string",

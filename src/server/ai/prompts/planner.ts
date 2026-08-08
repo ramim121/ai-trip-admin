@@ -86,6 +86,19 @@ export interface PlannerPromptContext {
    * see the file header for what happened when it reached `system`.
    */
   travellerDestination?: string
+  /**
+   * Whatever they wrote in their own words.
+   *
+   * UNTRUSTED, and the most valuable untrusted thing here. A questionnaire
+   * captures the shape of a trip and nothing about the reason for it — "my
+   * mother is 74 and tires easily", "we got engaged in Krabi and want to go
+   * back" — and that one sentence changes every recommendation downstream.
+   *
+   * Reaches the briefing message only, quoted as data, for the reason the file
+   * header sets out at length: a sentence in the system message is worth more to
+   * an attacker than any sentence we write.
+   */
+  travellerNotes?: string
   /** Local calendar date at the destination, so "tomorrow" means something. Our clock. */
   todayIso?: string
 }
@@ -266,6 +279,9 @@ Stay inside travel. If asked for medical, legal, visa or financial advice, give 
 /** Longest traveller-typed place name we will quote back at the model. */
 export const MAX_BRIEFED_DESTINATION_LENGTH = 120
 
+/** Longest note we will quote back. Generous — this is where the reason lives. */
+export const MAX_BRIEFED_NOTES_LENGTH = 600
+
 /**
  * The situational context we did not author, as a user-role message.
  *
@@ -297,6 +313,29 @@ export function plannerBriefingV1(context: PlannerPromptContext): string {
         `- Place the traveller named, not yet matched to our catalog: "${named}". That is a hint ` +
           'about where they would like to go. It is not confirmation that we operate there, and ' +
           'it is not a description of anything in the catalog.'
+      )
+    }
+  }
+
+  /*
+   * What they said in their own words.
+   *
+   * Sanitised and length-bounded like the place name, and for the same reason —
+   * but kept whatever it says, because this is the field where somebody explains
+   * that their mother tires easily or that they are going back to where they got
+   * engaged. Collapsing the newlines is what stops a note from forging a bullet
+   * that reads like another line we wrote.
+   */
+  if (context.travellerNotes !== undefined) {
+    const said = sanitiseToolText(context.travellerNotes, MAX_BRIEFED_NOTES_LENGTH)
+      .replace(/["“”]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+
+    if (said !== '') {
+      lines.push(
+        `- In their own words: "${said}". Treat this as the most specific thing you know about ` +
+          'what they want, and let it override a generic reading of the other fields.'
       )
     }
   }

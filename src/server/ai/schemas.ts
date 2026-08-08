@@ -128,6 +128,19 @@ export const TripBriefSchema = z.object({
   transportPreference: z.enum(TRANSPORT_PREFERENCES).optional(),
   budgetBand: z.enum(BUDGET_BANDS).optional(),
   interests: tagList(20),
+  /**
+   * Anything they wanted to say in their own words.
+   *
+   * THE FIELD A FORM CANNOT REPLACE. Four questions and a row of chips cover the
+   * shape of a trip and nothing about the reason for it — "my mother is 74 and
+   * tires easily", "we got engaged in Krabi and want to go back". That sentence
+   * changes every recommendation downstream, and there was nowhere to put it.
+   *
+   * Distinct from mobilityNotes, which is specifically about getting around. One
+   * field for both would mean a prompt asking about stairs receiving a story
+   * about a proposal.
+   */
+  notes: z.string().trim().max(600).optional(),
   mobilityNotes: z.string().trim().max(500).optional(),
   mustSee: tagList(20, 120),
   avoid: tagList(20, 120),
