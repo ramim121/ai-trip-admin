@@ -1,6 +1,8 @@
-import { ItineraryStatus, QuoteStatus } from '@/generated/prisma/enums'
+import type { Prisma } from '@/generated/prisma/client'
+import { ItineraryStatus, JourneyStatus, QuoteStatus } from '@/generated/prisma/enums'
 import { db } from '@/lib/db'
 import { badRequest, conflict, notFound } from '@/server/http/errors'
+import { syncJourneyStatus } from '@/server/modules/journey/quotation'
 
 /**
  * Quotations: what a trip would actually cost, and who said so.
@@ -41,6 +43,25 @@ const REVISION_SELECT = {
   validUntil: true,
   sentAt: true,
   createdAt: true,
+  /*
+   * Present on a journey quote, empty on an itinerary one.
+   *
+   * Not a second read: the traveller's quote screen shows the breakdown beside
+   * the total, and a quote whose total nobody can account for is the thing this
+   * whole product exists to replace.
+   */
+  lines: {
+    orderBy: { sortOrder: 'asc' },
+    select: {
+      id: true,
+      journeyItemId: true,
+      vendorName: true,
+      label: true,
+      detail: true,
+      priceBdt: true,
+      quantity: true,
+    },
+  },
 } as const
 
 const QUOTE_SELECT = {
@@ -53,8 +74,36 @@ const QUOTE_SELECT = {
   itinerary: {
     select: { id: true, title: true, destinationLabel: true, totalDays: true, partySize: true },
   },
+  /*
+   * Exactly one of these two is set — the CHECK on the quotes table says so —
+   * and which one decides where the traveller is sent to read it: the itinerary
+   * viewer, or the planner's side-by-side comparison.
+   */
+  journeyId: true,
+  journey: {
+    select: {
+      id: true,
+      title: true,
+      destinations: true,
+      durationDays: true,
+      partyAdults: true,
+      partyChildren: true,
+    },
+  },
   revisions: { orderBy: { version: 'desc' }, select: REVISION_SELECT },
-} as const
+  /*
+   * `satisfies`, NOT `as const`.
+   *
+   * `as const` types this as a frozen literal that Prisma accepts structurally
+   * without ever checking the field names against the model — so `adults`, which
+   * is really `partyAdults`, typechecked cleanly and failed at runtime on the
+   * first read. `satisfies` gets the names checked at compile time while leaving
+   * the literal types intact for inference.
+   *
+   * It cannot go on REVISION_SELECT: `as const` there would make the orderBy
+   * arrays readonly, which Prisma rejects — the mirror-image trap.
+   */
+} satisfies Prisma.QuoteSelect
 
 /**
  * Ask what a trip would cost.
@@ -166,10 +215,19 @@ export async function listMyQuotes(userId: string, take = 50) {
   return quotes.map((q) => ({ ...q, revisions: q.revisions.filter((r) => r.sentAt !== null) }))
 }
 
-/** The ops queue: everything still open. */
+/**
+ * The ops queue: every itinerary quote still open.
+ *
+ * SCOPED TO ITINERARY QUOTES, and that scope is load-bearing rather than tidy.
+ * A journey quote has no itinerary — the CHECK guarantees it — so one appearing
+ * here would reach a screen that reads `quote.itinerary.title` and render a row
+ * with no trip on it. Journeys have their own queue and their own workbench,
+ * because pricing a plan line by line is a different job from pricing a trip as
+ * a total, and this is the filter that keeps the two apart.
+ */
 export async function listQuoteQueue(take = 100) {
   return db.quote.findMany({
-    where: { status: { in: [...OPEN_STATUSES] } },
+    where: { status: { in: [...OPEN_STATUSES] }, itineraryId: { not: null } },
     // Oldest first, deliberately. A queue sorted newest-first is a queue where
     // the request nobody has answered sinks quietly out of sight.
     orderBy: { requestedAt: 'asc' },
@@ -375,13 +433,25 @@ export async function sendQuote(quoteId: string, now: Date = new Date()) {
 
     const quote = await tx.quote.findUnique({
       where: { id: quoteId },
-      select: { itineraryId: true },
+      select: { itineraryId: true, journeyId: true },
     })
 
     if (quote?.itineraryId) {
       await tx.itinerary.update({
         where: { id: quote.itineraryId },
         data: { status: ItineraryStatus.QUOTED },
+      })
+    }
+
+    // A journey quote moves its plan exactly as an itinerary quote moves its
+    // trip. Inside the transaction with the send, so no crash can leave a plan
+    // reading "with us for pricing" beside a price already on the traveller's
+    // screen. The CHECK on the quotes table guarantees only one of these two
+    // ids is ever set, so this is an else in everything but syntax.
+    if (quote?.journeyId) {
+      await tx.journey.update({
+        where: { id: quote.journeyId },
+        data: { status: JourneyStatus.QUOTED },
       })
     }
   })
@@ -430,6 +500,11 @@ export async function withdrawQuote(quoteId: string, now: Date = new Date()) {
       data: { status: ItineraryStatus.SAVED },
     })
   }
+
+  // A withdrawn journey quote hands the plan back, editable, exactly as SAVED
+  // does for an itinerary. PLANNING is that state — the traveller can change
+  // things and ask again, which is the whole reason withdrawal exists.
+  await syncJourneyStatus(quoteId, JourneyStatus.PLANNING)
 
   return readQuote(quoteId)
 }
@@ -480,6 +555,11 @@ export async function decideQuote(
       data: { status: accept ? ItineraryStatus.ACCEPTED : ItineraryStatus.SAVED },
     })
   }
+
+  // Declining returns the plan to PLANNING rather than leaving it QUOTED, for
+  // the reason above: the status a traveller sees has to reflect the last thing
+  // they did, and declining is a thing they did.
+  await syncJourneyStatus(quoteId, accept ? JourneyStatus.ACCEPTED : JourneyStatus.PLANNING)
 
   return readMyQuote(userId, quoteId)
 }

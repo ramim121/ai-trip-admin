@@ -806,10 +806,11 @@ model Activity {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  images         ActivityImage[]
-  tags           ActivityTag[]
-  openingHours   ActivityOpeningHours[]
-  blocks         ItineraryBlock[]
+  images       ActivityImage[]
+  tags         ActivityTag[]
+  openingHours ActivityOpeningHours[]
+  blocks       ItineraryBlock[]
+
   /// Set when this activity came from an approved Google Places import.
   placeCandidate PlaceCandidate?
   journeyItems   JourneyItem[]
@@ -2364,6 +2365,10 @@ model QuoteRevision {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  /// What ops actually charged, line by line. Empty on a legacy quote priced
+  /// as a single total.
+  lines QuoteLineItem[]
+
   @@unique([quoteId, version])
   @@index([quoteId, sentAt])
   @@map("quote_revisions")
@@ -2684,6 +2689,10 @@ model JourneyItem {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  /// The quote lines pricing this item. SetNull on delete, so the money
+  /// conversation survives the traveller removing what it was about.
+  quoteLines QuoteLineItem[]
+
   @@index([journeyId, dayNumber, slot])
   @@index([activityId])
   @@map("journey_items")
@@ -2797,4 +2806,43 @@ model ProviderCache {
   @@index([expiresAt])
   @@index([provider, endpoint])
   @@map("provider_cache")
+}
+
+/// One priced line of a quotation.
+///
+/// THE ROW WHERE THE TWO PLANS MEET. `journeyItemId` points back at the item the
+/// traveller placed, so the side-by-side comparison is a join rather than a
+/// guess about which row corresponds to which. Null for a line ops adds that
+/// nobody planned — a visa fee, an airport transfer, insurance.
+model QuoteLineItem {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  quoteRevisionId String        @db.Uuid
+  quoteRevision   QuoteRevision @relation(fields: [quoteRevisionId], references: [id], onDelete: Cascade)
+
+  /// SetNull: the traveller may delete an item after being quoted for it. What
+  /// we charged is a fact about the quote rather than about the plan.
+  journeyItemId String?      @db.Uuid
+  journeyItem   JourneyItem? @relation(fields: [journeyItemId], references: [id], onDelete: SetNull)
+
+  /// Who actually supplies it — the thing the traveller could not know. Their
+  /// plan says "beachfront hotel near the centre"; this says which hotel.
+  vendorName String?
+
+  label  String
+  detail String?
+
+  /// Whole taka, and a real price rather than a range. The estimate was the
+  /// traveller's; this is ours.
+  priceBdt Int
+  quantity Int @default(1)
+
+  sortOrder Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([quoteRevisionId, sortOrder])
+  @@index([journeyItemId])
+  @@map("quote_line_items")
 }

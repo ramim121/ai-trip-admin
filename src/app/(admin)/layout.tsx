@@ -42,6 +42,12 @@ const NAV = [
   // Quotes answers "who is waiting on us", and a queue nobody passes on the way
   // in is a queue that grows.
   { href: '/quotes', label: 'Quotes' },
+  // Plan quotes sits beside Quotes rather than inside it. Both are pricing
+  // queues, but one is a total against a trip somebody else assembled and the
+  // other is fifteen lines with a real vendor against each — different work,
+  // different screen, and a row in the wrong queue opens a workbench that
+  // cannot price it.
+  { href: '/journeys', label: 'Plan quotes' },
   // Bookings before Payments, and both before Coupons: a question about money
   // nearly always starts at "which booking", and the coupon is the explanation
   // for a figure on it rather than a thing anybody comes looking for first.
