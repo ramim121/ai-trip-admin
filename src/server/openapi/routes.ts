@@ -38,6 +38,25 @@ import {
   QuoteBody,
   QuoteResponse,
 } from '@/server/modules/bookings/schema'
+import {
+  AddItemBody,
+  CreateJourneyBody,
+  ElicitorResponse,
+  JourneyChatBody,
+  JourneyChatResponse,
+  JourneyListResponse,
+  JourneyView,
+  MoveItemBody,
+  ParseIntakeBody,
+  ParsedIntakeView,
+  RefineBriefBody,
+  RefineBriefResponse,
+  RequestJourneyQuoteBody,
+  SuggestionsResponse,
+  TransferOptionsResponse,
+  UpdateBasicsBody,
+  UpdateItemTimeBody,
+} from '@/server/modules/journey/schema'
 import { PastTripDetailResponse, PastTripListResponse } from '@/server/modules/past-trips/schema'
 import { ActivePollResponse, CastVoteBody, CastVoteResponse } from '@/server/modules/polls/schema'
 import {
@@ -1568,6 +1587,406 @@ registerRoute({
     401: errorResponse('Authentication is required.'),
     404: errorResponse('No such quote, or it is not yours.'),
     409: errorResponse('The quote is no longer open for a decision.'),
+    500: errorResponse(UNEXPECTED),
+  },
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Journey planner
+//
+// The quotation funnel, parallel to the curated planner. Every price it returns
+// is an estimate in a BDT range and is labelled one: what is sold here is a
+// quotation, and ops replaces each figure with a real vendor price.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const JOURNEYS = ['Journey planner'] as const
+
+const NOT_MY_JOURNEY =
+  'No such plan, or it belongs to somebody else. The two answer identically on purpose — ' +
+  'distinguishing them would make this endpoint a way to discover real plan ids.'
+
+registerRoute({
+  method: 'post',
+  path: '/api/v1/journeys/parse',
+  operationId: 'parseJourneyIntake',
+  summary: 'Understand a typed trip description',
+  description:
+    'THE ONE MODEL CALL AN ANONYMOUS VISITOR CAN MAKE, and the point of the funnel: somebody ' +
+    'types their trip, watches it be understood, and only then meets the sign-in wall.\n\n' +
+    'Nothing is persisted. The parse is returned and forgotten, so an unauthenticated caller can ' +
+    'spend a model call but cannot leave anything behind.\n\n' +
+    'Null means the traveller did not say, never that we guessed — the chips a client renders ' +
+    'from this are a mirror, and a mirror that flatters is worse than none. At most three ' +
+    'follow-up questions, each carrying an escape chip, because an interrogation at the top of a ' +
+    'funnel is how the funnel empties.',
+  tags: JOURNEYS,
+  requestSchema: ParseIntakeBody,
+  responses: {
+    200: { schema: ParsedIntakeView, description: 'What we understood, and what is missing.' },
+    400: errorResponse('The text was empty or too long.'),
+    429: errorResponse('Too many parses from this address in the last hour.'),
+    500: errorResponse(UNEXPECTED),
+  },
+})
+
+registerRoute({
+  method: 'get',
+  path: '/api/v1/journeys',
+  operationId: 'listJourneys',
+  summary: 'Every plan this traveller has',
+  tags: JOURNEYS,
+  security: 'user',
+  responses: {
+    200: { schema: JourneyListResponse, description: 'Newest first.' },
+    401: errorResponse('Authentication is required.'),
+    500: errorResponse(UNEXPECTED),
+  },
+})
+
+registerRoute({
+  method: 'post',
+  path: '/api/v1/journeys',
+  operationId: 'createJourney',
+  summary: 'Turn a typed sentence into a plan',
+  description:
+    'The parse is run again here rather than accepted from the client, even though /parse just ' +
+    'did it: a parse posted by a browser is a trip description the caller wrote, and trusting it ' +
+    'would let somebody set a sixty-day trip with a ten-lakh budget by editing a body.',
+  tags: JOURNEYS,
+  security: 'user',
+  requestSchema: CreateJourneyBody,
+  responses: {
+    201: { schema: JourneyView, description: 'The new plan, with no items yet.' },
+    400: errorResponse('The text was empty or too long.'),
+    401: errorResponse('Authentication is required.'),
+    429: errorResponse('Too many new plans from this account in the last hour.'),
+    500: errorResponse(UNEXPECTED),
+  },
+})
+
+registerRoute({
+  method: 'get',
+  path: '/api/v1/journeys/{id}',
+  operationId: 'getJourney',
+  summary: 'Read one plan',
+  description:
+    'Carries its own validation, budget and transfer gaps, all derived from the items rather ' +
+    'than stored — a cached status is a status that can be wrong.',
+  tags: JOURNEYS,
+  security: 'user',
+  responses: {
+    200: { schema: JourneyView, description: 'The plan.' },
+    401: errorResponse('Authentication is required.'),
+    404: errorResponse(NOT_MY_JOURNEY),
+    500: errorResponse(UNEXPECTED),
+  },
+})
+
+registerRoute({
+  method: 'patch',
+  path: '/api/v1/journeys/{id}',
+  operationId: 'updateJourneyBasics',
+  summary: 'Correct a fact about the trip',
+  description:
+    'What the editable chips above the workspace post to. A traveller fixes a parsing mistake by ' +
+    'tapping rather than by chatting.\n\n' +
+    'Shortening a trip moves orphaned items to the last day rather than deleting them: losing a ' +
+    'plan silently is worse than a crowded final day somebody can see and fix.',
+  tags: JOURNEYS,
+  security: 'user',
+  requestSchema: UpdateBasicsBody,
+  responses: {
+    200: { schema: JourneyView, description: 'The plan as it now stands.' },
+    400: errorResponse('A value was out of range.'),
+    401: errorResponse('Authentication is required.'),
+    404: errorResponse(NOT_MY_JOURNEY),
+    500: errorResponse(UNEXPECTED),
+  },
+})
+
+registerRoute({
+  method: 'post',
+  path: '/api/v1/journeys/{id}/claim',
+  operationId: 'claimJourney',
+  summary: 'Attach an anonymous plan to an account',
+  description:
+    'The other half of the anonymous funnel: a visitor parses a trip before they have an ' +
+    'account, and this carries it across the sign-in wall so nothing has to be retyped.\n\n' +
+    'Predicated on the plan having no owner, so a link somebody pasted cannot be claimed out ' +
+    'from under its owner.',
+  tags: JOURNEYS,
+  security: 'user',
+  responses: {
+    200: { schema: JourneyView, description: 'The plan, now owned.' },
+    401: errorResponse('Authentication is required.'),
+    409: errorResponse('That plan already belongs to an account.'),
+    500: errorResponse(UNEXPECTED),
+  },
+})
+
+registerRoute({
+  method: 'post',
+  path: '/api/v1/journeys/{id}/skeleton',
+  operationId: 'generateJourneySkeleton',
+  summary: 'Draft the whole trip',
+  description:
+    'Draft-first is the default, because a blank canvas suits a power planner and freezes ' +
+    'everybody else. Every item written is a placeholder describing a KIND of thing and never a ' +
+    'named business — real options arrive when the traveller opens a pillar.\n\n' +
+    'Refuses on a plan that already has items: a second skeleton would silently discard whatever ' +
+    'they had arranged.',
+  tags: JOURNEYS,
+  security: 'user',
+  responses: {
+    200: { schema: JourneyView, description: 'The drafted plan.' },
+    401: errorResponse('Authentication is required.'),
+    404: errorResponse(NOT_MY_JOURNEY),
+    409: errorResponse('This plan already has a draft.'),
+    429: errorResponse('Too many drafts from this account in the last hour.'),
+    500: errorResponse(UNEXPECTED),
+  },
+})
+
+registerRoute({
+  method: 'post',
+  path: '/api/v1/journeys/{id}/items',
+  operationId: 'addJourneyItem',
+  summary: 'Put something on a day',
+  description:
+    'NO PRICE IS ACCEPTED. When the item names a Viator product its estimate, image, rating and ' +
+    'deep link are read from the provider server-side and snapshotted — so a browser cannot ' +
+    'decide what something costs, and a quotation is priced against what the traveller was ' +
+    'actually looking at.\n\n' +
+    'Snapshotted rather than re-fetched later: a tour that changes price next week must not ' +
+    'silently change what somebody asked for.',
+  tags: JOURNEYS,
+  security: 'user',
+  requestSchema: AddItemBody,
+  responses: {
+    201: { schema: JourneyView, description: 'The plan with the item on it.' },
+    400: errorResponse('The day is outside the trip, or the source and reference disagree.'),
+    401: errorResponse('Authentication is required.'),
+    404: errorResponse(NOT_MY_JOURNEY),
+    500: errorResponse(UNEXPECTED),
+  },
+})
+
+registerRoute({
+  method: 'patch',
+  path: '/api/v1/journeys/{id}/items/{itemId}',
+  operationId: 'moveJourneyItem',
+  summary: 'Move an item to another day or day-part',
+  tags: JOURNEYS,
+  security: 'user',
+  requestSchema: MoveItemBody,
+  responses: {
+    200: { schema: JourneyView, description: 'The plan as it now stands.' },
+    400: errorResponse('That day is outside the trip.'),
+    401: errorResponse('Authentication is required.'),
+    404: errorResponse('No such item on this plan.'),
+    500: errorResponse(UNEXPECTED),
+  },
+})
+
+registerRoute({
+  method: 'delete',
+  path: '/api/v1/journeys/{id}/items/{itemId}',
+  operationId: 'removeJourneyItem',
+  summary: 'Take an item off the plan',
+  tags: JOURNEYS,
+  security: 'user',
+  responses: {
+    200: { schema: JourneyView, description: 'The plan without it.' },
+    401: errorResponse('Authentication is required.'),
+    404: errorResponse('No such item on this plan.'),
+    500: errorResponse(UNEXPECTED),
+  },
+})
+
+registerRoute({
+  method: 'patch',
+  path: '/api/v1/journeys/{id}/items/{itemId}/time',
+  operationId: 'setJourneyItemTime',
+  summary: 'Pin an item to a clock, or let it float',
+  description:
+    'Separate from moving, because they are different acts. Moving changes which part of the day ' +
+    'something sits in; this pins it to a time, which is what lets the conflict checker compare ' +
+    'it against others. Null clears it and lets the item float within its slot again.',
+  tags: JOURNEYS,
+  security: 'user',
+  requestSchema: UpdateItemTimeBody,
+  responses: {
+    200: { schema: JourneyView, description: 'The plan as it now stands.' },
+    400: errorResponse('That is not a time of day.'),
+    401: errorResponse('Authentication is required.'),
+    404: errorResponse('No such item on this plan.'),
+    500: errorResponse(UNEXPECTED),
+  },
+})
+
+registerRoute({
+  method: 'post',
+  path: '/api/v1/journeys/{id}/briefs',
+  operationId: 'refineJourneyBrief',
+  summary: 'Merge a message into a preference brief',
+  description:
+    'THE FLAGSHIP FEATURE, and what the admin actually consumes. Every message about one ' +
+    'category in one place merges into a single structured brief instead of scrolling away as ' +
+    'prose, and it survives a concrete pick — knowing somebody chose one hotel AND wanted ' +
+    '"3-star plus, pool, quiet end of Patong" is what lets ops substitute something better with ' +
+    'confidence.\n\n' +
+    'A constraint the new message does not mention is kept, never dropped. Otherwise a ' +
+    'conversation becomes a game of repeating yourself.',
+  tags: JOURNEYS,
+  security: 'user',
+  requestSchema: RefineBriefBody,
+  responses: {
+    200: { schema: RefineBriefResponse, description: 'The merged brief and what to ask next.' },
+    400: errorResponse('The message or place was empty.'),
+    401: errorResponse('Authentication is required.'),
+    404: errorResponse(NOT_MY_JOURNEY),
+    429: errorResponse('Too much refining from this account in the last hour.'),
+    500: errorResponse(UNEXPECTED),
+  },
+})
+
+registerRoute({
+  method: 'get',
+  path: '/api/v1/journeys/{id}/suggestions',
+  operationId: 'journeySuggestions',
+  summary: 'Six real options for one pillar',
+  description:
+    'Candidates come from Viator for activities and Google Places for stays and food, and the ' +
+    'ranker may only choose among them — every fact on a card is one the provider stated.\n\n' +
+    'Six, never more: a marketplace wants hundreds because browsing is its product, and a plan ' +
+    'wants a shortlist, because choice overload is what stops an itinerary getting finished.\n\n' +
+    'When fewer than three fit, the response names the single constraint most worth relaxing, so ' +
+    'a dead end becomes a next step.',
+  tags: JOURNEYS,
+  security: 'user',
+  responses: {
+    200: { schema: SuggestionsResponse, description: 'Up to six, best fit first.' },
+    400: errorResponse('The pillar or place was missing.'),
+    401: errorResponse('Authentication is required.'),
+    404: errorResponse(NOT_MY_JOURNEY),
+    429: errorResponse('Too much searching from this account in the last hour.'),
+    500: errorResponse(UNEXPECTED),
+  },
+})
+
+registerRoute({
+  method: 'get',
+  path: '/api/v1/journeys/{id}/elicit',
+  operationId: 'elicitPackagePreference',
+  summary: 'Ask which format of a packaged tour somebody wants',
+  description:
+    'Fires when a traveller picks a CATEGORY matching many real products — island hopping in ' +
+    'Krabi is hundreds of them. Every chip describes something present in the actual inventory, ' +
+    'because an invented option leads somebody to state a preference for something nobody sells.' +
+    '\n\nA null question is a real answer rather than a failure: when the products do not ' +
+    'meaningfully differ, asking anyway would be a question with one true answer.',
+  tags: JOURNEYS,
+  security: 'user',
+  responses: {
+    200: { schema: ElicitorResponse, description: 'One question, or none worth asking.' },
+    400: errorResponse('The category or place was missing.'),
+    401: errorResponse('Authentication is required.'),
+    404: errorResponse(NOT_MY_JOURNEY),
+    429: errorResponse('Too many questions from this account in the last hour.'),
+    500: errorResponse(UNEXPECTED),
+  },
+})
+
+registerRoute({
+  method: 'get',
+  path: '/api/v1/journeys/{id}/transfers',
+  operationId: 'journeyTransferOptions',
+  summary: 'How to get from one place to another',
+  description:
+    'Answers a gap-card. The curated route table is consulted first and its rows are treated as ' +
+    'facts — where the agency has sold a route it knows the price, and that returns as high ' +
+    'confidence. Where it has not, the model estimates and says so, and the interface shows the ' +
+    'difference so the badge means something.',
+  tags: JOURNEYS,
+  security: 'user',
+  responses: {
+    200: { schema: TransferOptionsResponse, description: 'At most three, cheapest first.' },
+    400: errorResponse('Both places are required, and they must differ.'),
+    401: errorResponse('Authentication is required.'),
+    404: errorResponse(NOT_MY_JOURNEY),
+    429: errorResponse('Too many routes from this account in the last hour.'),
+    500: errorResponse(UNEXPECTED),
+  },
+})
+
+registerRoute({
+  method: 'post',
+  path: '/api/v1/journeys/{id}/chat',
+  operationId: 'journeyChat',
+  summary: 'A turn of the itinerary conversation',
+  description:
+    'THE MODEL PROPOSES, THE SERVER APPLIES. Actions come back as structured objects and each is ' +
+    'executed through the same functions a button press uses — so a model cannot write day 9 ' +
+    'onto a seven-day trip, cannot touch a plan that is not the caller’s, and cannot skip a ' +
+    'validation.\n\n' +
+    'An action that fails does not fail the turn: the traveller gets the reply and whatever did ' +
+    'apply, because a partial edit with an honest answer beats a 500 that loses the sentence ' +
+    'they typed.',
+  tags: JOURNEYS,
+  security: 'user',
+  requestSchema: JourneyChatBody,
+  responses: {
+    200: { schema: JourneyChatResponse, description: 'The reply, and the plan after it.' },
+    400: errorResponse('The message was empty or too long.'),
+    401: errorResponse('Authentication is required.'),
+    404: errorResponse(NOT_MY_JOURNEY),
+    429: errorResponse('Too many messages from this account in the last hour.'),
+    500: errorResponse(UNEXPECTED),
+  },
+})
+
+registerRoute({
+  method: 'post',
+  path: '/api/v1/journeys/{id}/quote',
+  operationId: 'requestJourneyQuote',
+  summary: 'Send the plan for pricing',
+  description:
+    'THE CONVERSION. No price comes back — the response is the plan with its status moved, ' +
+    'because an instant number on a bespoke trip is a guess presented as a quote. Ops prices it ' +
+    'by hand through the same Quote tables the curated planner uses, so there is one queue and ' +
+    'one pricing pipeline.\n\n' +
+    'Three gates, each with its own sentence: something planned, no unresolved overlaps, and no ' +
+    'quote already open. The middle one is the reason conflict detection exists.',
+  tags: JOURNEYS,
+  security: 'user',
+  requestSchema: RequestJourneyQuoteBody,
+  responses: {
+    201: { schema: JourneyView, description: 'The plan, now awaiting a price.' },
+    400: errorResponse('Nothing planned yet, an unresolved overlap, or no contact number.'),
+    401: errorResponse('Authentication is required.'),
+    404: errorResponse(NOT_MY_JOURNEY),
+    409: errorResponse('A quote for this plan is already open.'),
+    429: errorResponse('Too many quote requests from this account in the last hour.'),
+    500: errorResponse(UNEXPECTED),
+  },
+})
+
+registerRoute({
+  method: 'get',
+  path: '/api/v1/shared-journeys/{token}',
+  operationId: 'getSharedJourney',
+  summary: 'Read a plan by its share link',
+  description:
+    'NO AUTHENTICATION, BY DESIGN. Every shared link is free distribution: a co-traveller opens ' +
+    'it from WhatsApp, sees the plan, and no account stands between them and it.\n\n' +
+    'Read-only by construction rather than by a flag — no write path anywhere accepts a token, ' +
+    'so the worst a leaked link can do is show somebody a holiday. The token is 144 bits of ' +
+    'randomness and is deliberately not interchangeable with a plan id, which is guessable in a ' +
+    'way a token is not.',
+  tags: JOURNEYS,
+  responses: {
+    200: { schema: JourneyView, description: 'The plan, read-only.' },
+    404: errorResponse('That link is not valid.'),
     500: errorResponse(UNEXPECTED),
   },
 })
