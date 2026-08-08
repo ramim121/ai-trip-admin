@@ -44,6 +44,7 @@ import {
   ElicitorResponse,
   JourneyChatBody,
   JourneyChatResponse,
+  JourneyComparisonView,
   JourneyListResponse,
   JourneyView,
   MoveItemBody,
@@ -1967,6 +1968,36 @@ registerRoute({
     404: errorResponse(NOT_MY_JOURNEY),
     409: errorResponse('A quote for this plan is already open.'),
     429: errorResponse('Too many quote requests from this account in the last hour.'),
+    500: errorResponse(UNEXPECTED),
+  },
+})
+
+registerRoute({
+  method: 'get',
+  path: '/api/v1/journeys/{id}/comparison',
+  operationId: 'getJourneyComparison',
+  summary: 'What they planned, beside what it costs',
+  description:
+    'The other half of the pricing workbench. Ops put a real vendor and a real price against ' +
+    'each line; this is the traveller seeing both columns. A quotation arriving as one number ' +
+    'asks somebody to trust it — one arriving as fifteen lines, each beside the thing they chose ' +
+    'and the estimate they were shown, can be read.\n\n' +
+    'THE PLAN IS THE SPINE AND THE QUOTE HANGS OFF IT. Every planned item appears as a row ' +
+    'whether or not it was priced, so a line nobody quoted for shows as an absence rather than ' +
+    'by simply not being there. Lines with no `journeyItemId` collect in `extras` — visas, ' +
+    'airport transfers, insurance — because "things we added" is a different question from ' +
+    '"what you asked for, priced".\n\n' +
+    'Only SENT revisions appear. A draft is a number nobody has agreed to stand behind, and a ' +
+    'traveller shown one would quite reasonably hold us to it. `revision` is null until one is ' +
+    'sent, and the rows still render with the traveller\'s own estimates.\n\n' +
+    'Deliberately not reachable by share token: a share link shows a friend the holiday, and ' +
+    'what it costs is between the traveller and us.',
+  tags: JOURNEYS,
+  security: 'user',
+  responses: {
+    200: { schema: JourneyComparisonView, description: 'Both columns.' },
+    401: errorResponse('Authentication is required.'),
+    404: errorResponse(NOT_MY_JOURNEY),
     500: errorResponse(UNEXPECTED),
   },
 })

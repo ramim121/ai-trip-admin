@@ -417,6 +417,79 @@ export const TransferOptionsResponse = z
       'model estimated it. The distinction is shown to the traveller, so it has to mean something.',
   })
 
+export const QuotedLineView = z
+  .object({
+    id: z.string(),
+    journeyItemId: z.string().nullable(),
+    vendorName: z.string().nullable(),
+    label: z.string(),
+    detail: z.string().nullable(),
+    priceBdt: z.int(),
+    quantity: z.int(),
+  })
+  .meta({
+    id: 'QuotedLineView',
+    description:
+      'One priced line. `vendorName` is the thing the traveller could not know: their plan said ' +
+      '"beachfront hotel near the centre" and this says which hotel. `priceBdt` is a real price ' +
+      'for the whole party rather than a band, because the band was theirs and this is ours.',
+  })
+
+export const QuotedRevisionView = z
+  .object({
+    id: z.string(),
+    version: z.int(),
+    subtotalBdt: z.int(),
+    discountBdt: z.int(),
+    totalBdt: z.int(),
+    inclusions: z.array(z.string()),
+    exclusions: z.array(z.string()),
+    terms: z.string().nullable(),
+    travellerMessage: z.string().nullable(),
+    validUntil: z.string().nullable(),
+    sentAt: z.string().nullable(),
+  })
+  .meta({ id: 'QuotedRevisionView' })
+
+export const ComparisonRowView = z
+  .object({
+    item: JourneyItemView,
+    /** Null where we are not quoting for this — an absence, deliberately shown. */
+    quoted: QuotedLineView.nullable(),
+  })
+  .meta({ id: 'ComparisonRowView' })
+
+export const JourneyComparisonView = z
+  .object({
+    journeyId: z.string(),
+    title: z.string().nullable(),
+    destinations: z.array(z.string()),
+    durationDays: z.int(),
+    startDate: z.string().nullable(),
+    partySize: z.int(),
+    status: z.enum(JourneyStatus),
+    quoteId: z.string().nullable(),
+    quoteStatus: z.string().nullable(),
+    revision: QuotedRevisionView.nullable(),
+    rows: z.array(ComparisonRowView),
+    extras: z.array(QuotedLineView),
+    /** Both ends of the traveller's own estimates, for the honest side-by-side. */
+    estimatedMinBdt: z.int(),
+    estimatedMaxBdt: z.int(),
+  })
+  .meta({
+    id: 'JourneyComparisonView',
+    description:
+      'What they planned beside what it costs.\n\n' +
+      'THE PLAN IS THE SPINE AND THE QUOTE HANGS OFF IT. Every planned item appears as a row ' +
+      'whether or not it was priced, so a line ops decided not to quote for shows as an absence ' +
+      'rather than by simply not being there — the difference between noticing now and noticing ' +
+      'at the airport. Lines with no `journeyItemId` are collected in `extras`, because "things ' +
+      'we added" is a different question from "what you asked for, priced".\n\n' +
+      'Only sent revisions ever appear here. A draft is a number nobody has agreed to stand ' +
+      'behind, and a traveller shown one would quite reasonably hold us to it.',
+  })
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Projections
 // ─────────────────────────────────────────────────────────────────────────────
@@ -558,5 +631,99 @@ export function toJourneyView(
     budget: extras.budget,
     transferGaps: extras.transferGaps,
     updatedAt: row.updatedAt.toISOString(),
+  }
+}
+
+/**
+ * The comparison, as the traveller's screen wants it.
+ *
+ * `toItemView` is reused rather than reimplemented, so an item on this screen is
+ * the same object it is in the workspace — one projection, one set of
+ * components, and no chance of the two drifting into disagreement about what an
+ * estimate means.
+ */
+export function toComparisonView(
+  input: {
+    journey: {
+      id: string
+      title: string | null
+      destinations: string[]
+      durationDays: number
+      startDate: Date | null
+      partyAdults: number
+      partyChildren: number
+      partySize: number
+      budgetMinBdt: number | null
+      budgetMaxBdt: number | null
+      status: JourneyStatus
+    }
+    quote: { id: string; status: string } | null
+    revision: {
+      id: string
+      version: number
+      subtotalBdt: number
+      discountBdt: number
+      totalBdt: number
+      inclusions: string[]
+      exclusions: string[]
+      terms: string | null
+      travellerMessage: string | null
+      validUntil: Date | null
+      sentAt: Date | null
+    } | null
+    rows: { item: ItemRow; quoted: QuotedLineRow | null }[]
+    extras: QuotedLineRow[]
+  },
+  estimate: { estimatedMinBdt: number; estimatedMaxBdt: number }
+): z.infer<typeof JourneyComparisonView> {
+  return {
+    journeyId: input.journey.id,
+    title: input.journey.title,
+    destinations: input.journey.destinations,
+    durationDays: input.journey.durationDays,
+    startDate: toDateString(input.journey.startDate),
+    partySize: input.journey.partySize,
+    status: input.journey.status,
+    quoteId: input.quote?.id ?? null,
+    quoteStatus: input.quote?.status ?? null,
+    revision:
+      input.revision === null
+        ? null
+        : {
+            ...input.revision,
+            // Timestamps rather than calendar dates, so these are full ISO
+            // strings — the client decides how to say "held until Thursday".
+            validUntil: input.revision.validUntil?.toISOString() ?? null,
+            sentAt: input.revision.sentAt?.toISOString() ?? null,
+          },
+    rows: input.rows.map((row) => ({
+      item: toItemView(row.item),
+      quoted: row.quoted === null ? null : toLineView(row.quoted),
+    })),
+    extras: input.extras.map(toLineView),
+    estimatedMinBdt: estimate.estimatedMinBdt,
+    estimatedMaxBdt: estimate.estimatedMaxBdt,
+  }
+}
+
+interface QuotedLineRow {
+  id: string
+  journeyItemId: string | null
+  vendorName: string | null
+  label: string
+  detail: string | null
+  priceBdt: number
+  quantity: number
+}
+
+function toLineView(row: QuotedLineRow): z.infer<typeof QuotedLineView> {
+  return {
+    id: row.id,
+    journeyItemId: row.journeyItemId,
+    vendorName: row.vendorName,
+    label: row.label,
+    detail: row.detail,
+    priceBdt: row.priceBdt,
+    quantity: row.quantity,
   }
 }
