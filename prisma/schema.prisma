@@ -106,6 +106,7 @@ model User {
   /// and a redemption is the evidence a coupon ceiling was consumed.
   bookings          PackageBooking[]
   couponRedemptions CouponRedemption[]
+  journeys          Journey[]
 
   @@index([status])
   @@index([createdAt])
@@ -811,6 +812,7 @@ model Activity {
   blocks         ItineraryBlock[]
   /// Set when this activity came from an approved Google Places import.
   placeCandidate PlaceCandidate?
+  journeyItems   JourneyItem[]
 
   @@index([destinationId, isActive])
   @@index([category])
@@ -2429,4 +2431,338 @@ model PlaceCandidate {
   @@index([status, importedAt])
   @@index([destinationId, status])
   @@map("place_candidates")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Journey — the AI itinerary planner (Idea Gen spec)
+//
+// A SECOND PLANNER, deliberately parallel to Itinerary/ItineraryDay/
+// ItineraryBlock rather than an evolution of it. The two answer different
+// questions and are wanted side by side:
+//
+//   Itinerary  — the curated planner. Every activity is a catalogue row we can
+//                book, enforced by a foreign key. Nothing else may appear.
+//   Journey    — the quotation funnel. Items may come from Viator, Google
+//                Places or an AI estimate, because what is sold here is a
+//                QUOTATION rather than a booking: every figure is an estimate,
+//                and the admin replaces it with a real vendor price.
+//
+// Mixing them would mean either weakening the catalogue guarantee or crippling
+// the funnel, so they stay separate tables with separate rules.
+//
+// Named Journey rather than Trip because Trip* already belongs to the past-trips
+// showcase (TripHighlight, TripLeader, TripMedia, TripParticipant, TripReview).
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum JourneyStatus {
+  PLANNING
+  QUOTATION_REQUESTED
+  QUOTED
+  ACCEPTED
+}
+
+/// When the traveller wants to go, before they commit to dates.
+enum DateBucket {
+  NEXT_WEEK
+  TWO_TO_FOUR_WEEKS
+  NEXT_MONTH
+  CUSTOM
+}
+
+/// Humans plan in day-parts, not timestamps. Exact times are optional on top.
+enum DaySlot {
+  MORNING
+  AFTERNOON
+  EVENING
+}
+
+enum JourneyItemType {
+  ACTIVITY
+  STAY
+  FOOD
+  TRANSFER
+}
+
+/// Whether the traveller chose this or we proposed it.
+///
+/// The admin has to be able to tell the difference: an item the customer
+/// actively pinned is a requirement, and one we suggested is a starting point
+/// they merely did not object to. Quoting those the same way is how you replace
+/// the one thing they cared about.
+enum ItemOrigin {
+  USER_PINNED
+  AI_SUGGESTED
+}
+
+/// Where an item's facts came from.
+///
+/// AI_ESTIMATE is the only value that is not a real external record, and it
+/// exists for transfers, which no free source covers well. Every other value
+/// names a provider whose data can be checked.
+enum ItemSource {
+  VIATOR
+  GOOGLE_PLACES
+  CURATED
+  AI_ESTIMATE
+}
+
+enum BriefPillar {
+  STAY
+  ACTIVITY
+  FOOD
+  TRANSPORT
+}
+
+enum BudgetScope {
+  TOTAL_TRIP
+  PER_PERSON
+  PER_NIGHT
+}
+
+/// One planned trip, from first sentence to accepted quotation.
+model Journey {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  /// Null while a visitor is still being parsed anonymously. Set the moment they
+  /// sign in, which is what carries the parsed trip through the auth wall.
+  userId String? @db.Uuid
+  user   User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// Read-only public link. Unguessable, and the only way an unauthenticated
+  /// co-traveller sees the plan — viewing needs no account, editing does.
+  shareToken String @unique
+
+  title String?
+
+  /// Free text as the traveller typed it, kept verbatim. The parse is a
+  /// derivative and can be re-run; the original sentence cannot be rebuilt.
+  rawIntake String?
+
+  /// Several, in order. A multi-city trip is exactly the case that makes
+  /// transfers matter, so this is a list rather than one column.
+  destinations String[]
+
+  durationDays Int
+  dateBucket   DateBucket @default(CUSTOM)
+  startDate    DateTime?  @db.Date
+  endDate      DateTime?  @db.Date
+
+  partyAdults   Int     @default(2)
+  partyChildren Int     @default(0)
+  /// couple | family | friends | solo | group. Free text because the model
+  /// parses it from a sentence, and an enum would reject the ones nobody
+  /// anticipated.
+  partyType     String?
+
+  tripType  String?
+  interests String[]
+
+  /// Whole taka. Null when the traveller has not said, which is common and has
+  /// to stay distinguishable from "no budget at all".
+  budgetMinBdt Int?
+  budgetMaxBdt Int?
+  budgetScope  BudgetScope @default(TOTAL_TRIP)
+
+  status JourneyStatus @default(PLANNING)
+
+  /// Set when a quotation is requested. Pricing, revisions and sending stay in
+  /// the existing Quote model, which already owns all three.
+  quoteId String? @db.Uuid
+
+  contactWhatsapp      String?
+  contactEmail         String?
+  contactPreferredTime String?
+  userNotes            String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items  JourneyItem[]
+  briefs PreferenceBrief[]
+
+  @@index([userId, updatedAt])
+  @@index([status, updatedAt])
+  @@map("journeys")
+}
+
+/// One thing on one day.
+model JourneyItem {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  journeyId String  @db.Uuid
+  journey   Journey @relation(fields: [journeyId], references: [id], onDelete: Cascade)
+
+  /// 1-based. Day 1 is the first day of the trip, not an index.
+  dayNumber Int
+  slot      DaySlot
+
+  /// Minutes from local midnight, when the traveller set an exact time. Null
+  /// means "somewhere in this slot", which is how most of a plan gets written.
+  startMinute Int?
+  /// Typical length. Used with the slot to decide whether two items collide.
+  durationMin Int?
+
+  type   JourneyItemType
+  origin ItemOrigin      @default(AI_SUGGESTED)
+
+  source     ItemSource @default(AI_ESTIMATE)
+  /// Viator product code, Google place id, or null for an estimate.
+  externalId String?
+
+  /// Set only when the item is a real catalogue row. SetNull, so retiring an
+  /// activity does not delete somebody's plan.
+  activityId String?   @db.Uuid
+  activity   Activity? @relation(fields: [activityId], references: [id], onDelete: SetNull)
+
+  title       String
+  description String?
+
+  /// EVERY PRICE IS A RANGE, AND EVERY RANGE IS AN ESTIMATE. What is sold here
+  /// is a quotation; these numbers exist to set expectations and fill a budget
+  /// meter, and the admin replaces them with real vendor prices.
+  estPriceMinBdt Int?
+  estPriceMaxBdt Int?
+  /// person | group | night | trip
+  estPricePer    String?
+
+  /// At most fifteen words, echoing the traveller's own stated preferences.
+  /// What makes a suggestion feel chosen rather than dredged up.
+  matchReason String?
+
+  locationName String?
+  latitude     Decimal? @db.Decimal(9, 6)
+  longitude    Decimal? @db.Decimal(9, 6)
+
+  /// What the provider said at the moment this was picked — image, rating,
+  /// duration, deep link.
+  ///
+  /// SNAPSHOTTED RATHER THAN RE-FETCHED. A quotation is priced against what the
+  /// traveller was looking at, so a tour that changes price or disappears next
+  /// week must not silently change what they asked for. It is also what lets a
+  /// plan render without calling Viator on every page load.
+  snapshot Json?
+
+  /// The preference brief this was chosen against. Kept after the pick, so the
+  /// admin sees both what was chosen and what was actually wanted.
+  briefId String?          @db.Uuid
+  brief   PreferenceBrief? @relation(fields: [briefId], references: [id], onDelete: SetNull)
+
+  sortOrder Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([journeyId, dayNumber, slot])
+  @@index([activityId])
+  @@map("journey_items")
+}
+
+/// What the traveller wants from one pillar in one place — the curated prompt.
+///
+/// THE FLAGSHIP FEATURE, and the thing the admin actually consumes. Every chat
+/// message about hotels in Phuket merges into this one structured brief instead
+/// of scrolling away as prose. It survives a concrete pick on purpose: knowing
+/// the customer chose one hotel AND wanted "3-star plus, pool, quiet end of
+/// Patong, 4-6k a night" is what lets the admin substitute something better with
+/// confidence.
+model PreferenceBrief {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  journeyId String  @db.Uuid
+  journey   Journey @relation(fields: [journeyId], references: [id], onDelete: Cascade)
+
+  pillar   BriefPillar
+  /// Free text, matching how a traveller names places rather than a destination
+  /// id — "Patong" is a brief location and not a catalogue row.
+  location String
+  nights   Int?
+
+  /// star_min, location_hints[], budget_per_night{min,max}, amenities[], notes[]
+  /// Json, because the shape differs per pillar and the model writes it.
+  constraints Json
+
+  /// At most twenty-five words. What the chips say, in one sentence.
+  summary String
+
+  /// Every message that shaped this brief, oldest first. Kept so a curator can
+  /// see how a constraint arrived, and so a bad merge is diagnosable.
+  history Json @default("[]")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items JourneyItem[]
+
+  /// One brief per pillar per place. A second would split the constraints, and
+  /// the ranker would read half of them.
+  @@unique([journeyId, pillar, location])
+  @@map("preference_briefs")
+}
+
+/// The agency's own transfer knowledge, for routes no free API covers well.
+///
+/// A hand-maintained table beats every free source on exactly the routes most
+/// travellers take, because the agency has actually sold them. The AI estimator
+/// is the fallback for everything else, and says so by marking itself
+/// low-confidence.
+model RouteEstimate {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  /// Lowercased on write so "Krabi" and "krabi" are one route. A CHECK enforces
+  /// it, because a duplicate route is a second answer to one question.
+  fromLocation String
+  toLocation   String
+
+  /// bus | train | minivan | private_car | taxi | ferry | flight
+  mode String
+
+  durationMinMinutes Int
+  durationMaxMinutes Int
+
+  priceMinBdt Int
+  priceMaxBdt Int
+  /// person | vehicle
+  pricePer    String @default("person")
+
+  note String?
+
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// One row per route per mode — a bus and a private car are different answers
+  /// to the same question, and both should be offerable.
+  @@unique([fromLocation, toLocation, mode])
+  @@index([fromLocation, toLocation, isActive])
+  @@map("route_estimates")
+}
+
+/// Provider responses, cached because the free tiers are small and an estimate
+/// does not need to be fresh.
+///
+/// Viator's terms expect product data to be cached and refreshed periodically
+/// rather than called per page view, so this is alignment with their rules and
+/// not merely an optimisation. Google Places bills per call, and its
+/// Enterprise-tier fields — rating, photos — carry roughly a thousand free calls
+/// a month; without this, one busy afternoon spends the month.
+model ProviderCache {
+  /// sha256 of provider + endpoint + normalised request. The whole key, so a
+  /// lookup is a primary-key hit rather than a scan.
+  cacheKey String @id
+
+  provider String
+  endpoint String
+
+  payload Json
+
+  fetchedAt DateTime @default(now())
+  /// Rows past this are ignored on read and swept later. A column rather than a
+  /// constant, because search results and attraction records have very
+  /// different useful lives.
+  expiresAt DateTime
+
+  @@index([expiresAt])
+  @@index([provider, endpoint])
+  @@map("provider_cache")
 }
