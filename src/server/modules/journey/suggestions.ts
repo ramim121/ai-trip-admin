@@ -111,12 +111,30 @@ async function activitySuggestions(
 
   const destination = await resolveDestination(location)
 
+  /*
+   * THE FREE-TEXT SEARCH IS SCOPED TO THE DESTINATION, and that filter is
+   * load-bearing rather than an optimisation.
+   *
+   * Viator's free-text index is global: "island hopping and snorkelling Phuket"
+   * came back with a Nha Trang tour, and the ranker offered it, because the
+   * ranker may only choose from the candidates it is handed and has no way to
+   * know Vietnam is the wrong country. Naming the place in the search string is
+   * not the same as filtering by it.
+   *
+   * Where the destination does not resolve the filter is absent and the search
+   * is global again — but that is a place we could not identify at all, which is
+   * a different and much rarer failure than silently crossing a border.
+   */
   const found =
     briefSummary.trim() === ''
       ? destination === null
         ? { products: [] as ViatorProduct[] }
         : await searchProducts({ destinationId: destination.destinationId, count: 14 })
-      : await searchFreetext(`${briefSummary} ${location}`.trim(), 14)
+      : await searchFreetext(
+          `${briefSummary} ${location}`.trim(),
+          14,
+          destination?.destinationId
+        )
 
   const products =
     found.products.length > 0 || destination === null
@@ -302,7 +320,12 @@ export async function elicitFor(
 }> {
   if (!viatorConfigured()) return { question: null, reason: 'Tours are not configured.' }
 
-  const found = await searchFreetext(`${category} ${location}`.trim(), 10)
+  // Scoped to the destination for the reason `activitySuggestions` gives at
+  // length: an unfiltered free-text search is global, and a question elicited
+  // from another country's inventory would be about dimensions that do not vary
+  // here — the exact failure the elicitor exists to avoid.
+  const destination = await resolveDestination(location)
+  const found = await searchFreetext(`${category} ${location}`.trim(), 10, destination?.destinationId)
 
   if (found.products.length < 2) {
     return { question: null, reason: 'There are too few options here to be worth narrowing.' }

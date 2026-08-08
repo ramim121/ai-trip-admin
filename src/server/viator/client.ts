@@ -374,14 +374,27 @@ export async function searchProducts(
  */
 export async function searchFreetext(
   term: string,
-  count = 12
+  count = 12,
+  destinationId?: number
 ): Promise<{ products: ViatorProduct[]; totalCount: number }> {
   const trimmed = term.trim()
   if (trimmed === '') return { products: [], totalCount: 0 }
 
+  /*
+   * THE DESTINATION FILTER IS NOT OPTIONAL IN PRACTICE, only in the signature.
+   *
+   * Viator's free-text search is global. Searching "island hopping and
+   * snorkelling Phuket" without this returned a Nha Trang tour — Vietnam, 2,000
+   * kilometres away — and the ranker dutifully offered it, because the ranker's
+   * one hard rule is that it may only choose from the candidates it is given.
+   * The model was doing exactly as told; the candidate list was wrong.
+   *
+   * Caught by running a real trip end to end and reading the titles. Every
+   * schema check passed, every call succeeded, and the answer was Vietnam.
+   */
   const request = {
     searchTerm: trimmed,
-    productFiltering: {},
+    productFiltering: destinationId === undefined ? {} : { destination: String(destinationId) },
     searchTypes: [{ searchType: 'PRODUCTS', pagination: { start: 1, count: Math.min(count, 50) } }],
     currency: 'USD',
   }

@@ -166,8 +166,17 @@ export const RankedChoiceSchema = z.object({
    * The length cap IS the product rule. A paragraph of justification reads as a
    * sales pitch; one line quoting them back reads as having been listened to,
    * which is the entire effect being bought here.
+   *
+   * Trimmed rather than refused, for the reason `constraintWorthRelaxing` gives
+   * below: one card's slightly long sentence must not take the other five with
+   * it. The rule still holds — it is just enforced by the scissors instead of by
+   * throwing the batch away.
    */
-  matchReason: z.string().trim().min(1).max(120),
+  matchReason: z
+    .string()
+    .trim()
+    .min(1)
+    .transform((value) => (value.length <= 120 ? value : `${value.slice(0, 117)}…`)),
   /** Substrings of `matchReason` that came from the brief, for highlighting. */
   echoedPhrases: z.array(z.string().trim().min(1).max(60)).max(6),
 })
@@ -180,8 +189,22 @@ export const RankedBatchSchema = z.object({
    *
    * Turns a dead end into a next step: "nothing under ৳4,000 has a pool" is
    * something a traveller can act on, where "no results" is not.
+   *
+   * TRUNCATED RATHER THAN REFUSED, and that distinction cost a whole panel to
+   * learn. `.max(160)` made an over-long sentence a schema violation, and a
+   * schema violation on a `generateObject` call is a thrown error — so the model
+   * writing 194 characters instead of 160 took out the entire suggestion list,
+   * hotels and all, over an advisory footnote. A cap on a courtesy string is a
+   * house style, not an invariant, and enforcing it by refusal made the least
+   * important field in the response the one that could break it.
    */
-  constraintWorthRelaxing: z.string().trim().max(160).nullable(),
+  constraintWorthRelaxing: z
+    .string()
+    .trim()
+    .nullable()
+    .transform((value) =>
+      value === null || value === '' ? null : value.length <= 160 ? value : `${value.slice(0, 157)}…`
+    ),
 })
 
 export type RankedBatch = z.infer<typeof RankedBatchSchema>

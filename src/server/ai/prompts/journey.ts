@@ -157,7 +157,11 @@ For each choice write a match reason of at most fifteen words that echoes the tr
 
 Exclude anything that clearly fails a stated constraint, even when it is otherwise good — somebody who said three-star minimum does not want a two-star suggestion explained to them.
 
-If fewer than three candidates genuinely fit, return the ones that do and name the single constraint most worth relaxing to find more. Be specific about which one, and why it is the one blocking.
+A FACT THAT IS ABSENT HAS NOT FAILED. Our sources are uneven: Google can tell you a hotel exists and what people think of it and cannot tell you a nightly rate, so most hotel candidates arrive with no price at all. Treating a missing price as failing a budget is how you return nothing to somebody who asked a perfectly ordinary question. Judge on the facts you were given, ignore the constraints you cannot check, and mention the gap in your reason if it matters — never exclude for it.
+
+Return an empty list only when the candidates are genuinely about something else. Six imperfect real options beat none.
+
+If fewer than three candidates genuinely fit, return the ones that do and name the single constraint most worth relaxing to find more. Be specific about which one, and why it is the one blocking. Keep that under twenty-five words.
 `)
 }
 
