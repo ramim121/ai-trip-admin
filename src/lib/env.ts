@@ -93,6 +93,27 @@ const EnvSchema = z
      */
     GOOGLE_PLACES_API_KEY: z.string().optional(),
 
+    /**
+     * Viator Partner API. Optional — without it the tours pillar of the journey
+     * planner says so, and everything else still works.
+     *
+     * TWO KEYS, because Viator runs two hosts with separate credentials and a
+     * key issued for one is refused by the other. `VIATOR_USE_SANDBOX` chooses
+     * between them rather than the code inferring it from NODE_ENV: which host
+     * to call is a property of the key you were given, not of where the process
+     * happens to be running, and a staging deploy may legitimately want live
+     * inventory.
+     *
+     * Server-side only, no `NEXT_PUBLIC_` variant — this is a billable
+     * credential attached to an affiliate account.
+     */
+    VIATOR_API_KEY: z.string().optional(),
+    VIATOR_SANDBOX_API_KEY: z.string().optional(),
+    VIATOR_USE_SANDBOX: z
+      .string()
+      .optional()
+      .transform((value) => value === 'true'),
+
     PUBLIC_WEB_ORIGIN: z.url().default('http://localhost:3000'),
     ADMIN_ORIGIN: z.url().default('http://localhost:3001'),
 
